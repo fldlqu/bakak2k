@@ -22,7 +22,9 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "jszip": "^3.10.1",
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
     "koffi": "^3.1.4"
   }
 }
