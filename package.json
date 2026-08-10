@@ -1,0 +1,28 @@
+{
+  "name": "bakak2k",
+  "version": "0.1.0",
+  "description": "Pure-JS Japanese text -> reading kana (kanji2koe-style) engine that decodes a user-provided aqdic dictionary, with English and numeral reading support.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "serve": "node tools/serve.mjs",
+    "demo": "node tools/serve.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "keywords": [
+    "japanese",
+    "tts",
+    "kanji2koe",
+    "reading",
+    "kana",
+    "aquestalk"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "koffi": "^3.1.4"
+  }
+}

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bakak2k — 漢字→読み デモ</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.6 system-ui, Meiryo, sans-serif; max-width: 64em; margin: 2em auto; padding: 0 1em; }
+  textarea { width: 100%; box-sizing: border-box; font: inherit; padding: .4em; }
+  pre { background: #00000010; padding: .8em; border-radius: 6px; overflow-x: auto; }
+  button { padding: .35em .9em; margin: .4em .4em .4em 0; cursor: pointer; }
+  #status { color: #888; }
+  .acc { border-bottom: 2px solid; }
+  hr { margin: 1.4em 0; }
+</style>
+</head>
+<body>
+<h1>bakak2k</h1>
+<p>純JSの Marisa trie + TOK1 デコードによる漢字→かな変換。辞書は <code>aqk2k_win_413.zip</code> をその場で展開します。</p>
+
+<button id="load">aqdic を zip から読み込む</button>
+<span id="status"></span>
+
+<hr>
+
+<textarea id="input" rows="3"></textarea>
+<button id="run">変換</button>
+
+<h2>読み (toKana)</h2>
+<pre id="kana"></pre>
+
+<h2>詳細 (toKanaDetailed)</h2>
+<pre id="detail"></pre>
+
+<script type="importmap">
+  { "imports": { "jszip": "./js/jszip-wrapper.mjs" } }
+</script>
+<script type="module">
+  import { createDictAuto } from '../src/index.js';
+
+  const status = document.getElementById('status');
+  const textEl = document.getElementById('input');
+  const kanaEl = document.getElementById('kana');
+  const detailEl = document.getElementById('detail');
+
+  let dict = null;
+
+  document.getElementById('load').addEventListener('click', async () => {
+    status.textContent = 'fetch zip...';
+    status.style.color = '#888';
+    try {
+      const t0 = performance.now();
+      const res = await fetch('aqk2k_win_413.zip');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const zip = new Uint8Array(await res.arrayBuffer());
+      const t1 = performance.now();
+      dict = await createDictAuto(zip);
+      const t2 = performance.now();
+      status.style.color = '#080';
+      status.textContent =
+        `fetch ${(t1 - t0).toFixed(0)}ms, ビルド ${(t2 - t1).toFixed(0)}ms (辞書 ${dict.bySurface.size} 語)`;
+      render();
+    } catch (e) {
+      status.style.color = '#c00';
+      status.textContent = 'エラー: ' + e.message;
+      console.error(e);
+    }
+  });
+
+  function render() {
+    if (!dict) { kanaEl.textContent = '(辞書をロードしてください)'; return; }
+    const text = textEl.value || '東京都渋谷区';
+    const t0 = performance.now();
+    const kana = dict.toKana(text);
+    const t1 = performance.now();
+    kanaEl.textContent = `${kana}   [${(t1-t0).toFixed(2)}ms]`;
+    detailEl.textContent = JSON.stringify(dict.toKanaDetailed(text), null, 1);
+  }
+
+  document.getElementById('run').addEventListener('click', render);
+  render();
+</script>
+</body>
+</html>
