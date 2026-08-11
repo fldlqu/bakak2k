@@ -118,8 +118,9 @@ export class AqK2KDict {
     this._cache = new Map();
     this.bySurface = new Map();
     const n = this.trie.numKeys();
+    const surfaces = this.trie.allKeys();
     for (let i = 0; i < n; i++) {
-      const key = this.key(i);
+      const key = surfaces[i];
       const rel = u32(mapOff + i * 4);
       const rel2 = u32(mapOff + (i + 1) * 4);
       const records = decodeRecords(this.bytes, tokOff, tokSize, rel, rel2);
