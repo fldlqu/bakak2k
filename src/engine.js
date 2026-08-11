@@ -196,8 +196,11 @@ export class AqK2KDict {
   }
 
   // Whole-sentence converter: text -> kana string (passthrough for unknown).
+  // Spaces (half/full width) are dropped from the reading: English words produce
+  // one contiguous kana stream, so the synthesizer won't pause between words.
+  // Callers who want a deliberate pause insert 、 or ， themselves.
   toKana(text) {
-    return this.segment(text).map((t) => normalizeReading(t.reading?.text ?? t.surface)).join('');
+    return this.segment(text).map((t) => normalizeReading(t.reading?.text ?? t.surface)).join('').replace(/[ \u3000]/g, '');
   }
 
   // Whole-sentence converter with per-segment detail (surface/reading/accent).

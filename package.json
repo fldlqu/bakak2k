@@ -1,6 +1,6 @@
 {
   "name": "bakak2k",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pure-JS Japanese text -> reading kana (kanji2koe-style) engine that decodes a user-provided aqdic dictionary, with English and numeral reading support.",
   "type": "module",
   "main": "src/index.js",
