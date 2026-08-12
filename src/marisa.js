@@ -3,20 +3,10 @@
 // Implements the *reading* side only: lookup, reverse-lookup, key enumeration.
 // On-disk layout is little-endian; every multi-byte scalar is LE.
 
-function readWord(bytes, off) {
-  let v = 0n;
-  for (let i = 7; i >= 0; --i) v = (v << 8n) | BigInt(bytes[off + i]);
-  return v;
-}
 function popcount8(x) {
   x = x - ((x >> 1) & 0x55);
   x = (x & 0x33) + ((x >> 2) & 0x33);
   return (x + (x >> 4)) & 0x0f;
-}
-function popcount64(b) {
-  let n = 0;
-  for (let i = 0; i < 8; ++i) n += popcount8(Number((b >> BigInt(i * 8)) & 0xffn));
-  return n;
 }
 
 class BitVector {
@@ -30,10 +20,9 @@ class BitVector {
     this._sel1 = null;
     this._sel0 = null;
   }
+  // Byte-level bit test: avoids BigInt for hot-path operations.
   bit(i) {
-    const w = (i / 64) | 0;
-    const off = i & 63;
-    return ((readWord(this.bytes, this.unitsStart + w * 8) >> BigInt(off)) & 1n) === 1n;
+    return ((this.bytes[this.unitsStart + (i >> 3)] >> (i & 7)) & 1) === 1;
   }
   num_1s() {
     return this.count1;
@@ -43,8 +32,11 @@ class BitVector {
       const a = new Uint32Array(this.numUnits + 1);
       let acc = 0;
       a[0] = 0;
+      const b = this.bytes;
+      const base = this.unitsStart;
       for (let k = 0; k < this.numUnits; ++k) {
-        acc += popcount64(readWord(this.bytes, this.unitsStart + k * 8));
+        const off = base + k * 8;
+        for (let j = 0; j < 8; ++j) acc += popcount8(b[off + j]);
         a[k + 1] = acc;
       }
       this._rankWord = a;
@@ -56,27 +48,45 @@ class BitVector {
     const off = i & 63;
     let n = this.rankWord(w);
     if (off !== 0) {
-      n += popcount64(readWord(this.bytes, this.unitsStart + w * 8) & ((1n << BigInt(off)) - 1n));
+      // Byte-level popcount for partial word – no BigInt.
+      const b = this.bytes;
+      let pos = this.unitsStart + w * 8;
+      const full = off >> 3;
+      for (let j = 0; j < full; ++j) n += popcount8(b[pos++]);
+      const rem = off & 7;
+      if (rem) n += popcount8(b[pos] & ((1 << rem) - 1));
     }
     return n;
   }
-  _buildSelect() {
+  _buildSelect1() {
     if (this._sel1 !== null) return;
     const n1 = this.count1;
     this._sel1 = new Uint32Array(n1);
-    this._sel0 = new Uint32Array(this.size - n1);
-    let i1 = 0, i0 = 0;
-    for (let i = 0; i < this.size; ++i) {
-      if (this.bit(i)) this._sel1[i1++] = i;
-      else this._sel0[i0++] = i;
+    let i1 = 0;
+    const b = this.bytes;
+    const base = this.unitsStart;
+    const end = this.size;
+    for (let i = 0; i < end; ++i) {
+      if ((b[base + (i >> 3)] >> (i & 7)) & 1) this._sel1[i1++] = i;
+    }
+  }
+  _buildSelect0() {
+    if (this._sel0 !== null) return;
+    const size = this.size;
+    this._sel0 = new Uint32Array(size - this.count1);
+    let i0 = 0;
+    const b = this.bytes;
+    const base = this.unitsStart;
+    for (let i = 0; i < size; ++i) {
+      if (!((b[base + (i >> 3)] >> (i & 7)) & 1)) this._sel0[i0++] = i;
     }
   }
   select1(k) {
-    if (this._sel1 === null) this._buildSelect();
+    if (this._sel1 === null) this._buildSelect1();
     return this._sel1[k];
   }
   select0(k) {
-    if (this._sel0 === null) this._buildSelect();
+    if (this._sel0 === null) this._buildSelect0();
     return this._sel0[k];
   }
 }
@@ -145,15 +155,21 @@ export class Marisa {
         return bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24);
       };
     } else {
+      // Off-hot-path BigInt path: only used during trie parsing, not key enumeration.
+      const readWord = (off) => {
+        let v = 0n;
+        for (let j = 7; j >= 0; --j) v = (v << 8n) | BigInt(bytes[off + j]);
+        return v;
+      };
       get = (i) => {
         const pos = BigInt(i) * BigInt(valueSize);
         const unit = Number(pos >> 6n);
         const off = Number(pos & 63n);
-        const w0 = readWord(bytes, unitsStart + unit * 8);
+        const w0 = readWord(unitsStart + unit * 8);
         if (BigInt(off) + BigInt(valueSize) <= 64n) {
           return Number((w0 >> BigInt(off)) & ((1n << BigInt(valueSize)) - 1n));
         }
-        const w1 = readWord(bytes, unitsStart + (unit + 1) * 8);
+        const w1 = readWord(unitsStart + (unit + 1) * 8);
         return Number(((w0 >> BigInt(off)) | (w1 << BigInt(64 - off))) & ((1n << BigInt(valueSize)) - 1n));
       };
     }
@@ -271,7 +287,8 @@ class Trie {
   }
   allKeysInfo() {
     // Fast bulk enumeration: build per-node prefix ropes once (bottom-up), then
-    // O(1) per key. ~1.8x faster than calling key() per id on this corpus.
+    // O(1) per key.  Uses cached buildLevelMaps / buildUp to avoid duplicate
+    // work from the original buildPref → buildUp(tr.next) call chain.
     const trie = this;
     const u16dec = new TextDecoder('utf-16le');
     const d16 = (b) => u16dec.decode(b);
@@ -287,8 +304,10 @@ class Trie {
       return tmp;
     };
 
+    // Cache: _lm = level-maps result (sel, numNodes, linkVal), _up = buildUp result.
     const buildLevelMaps = (tr) => {
-      tr.louds._buildSelect();
+      if (tr._lm) return tr._lm;
+      tr.louds._buildSelect1();
       const sel = tr.louds._sel1;
       const numNodes = tr.louds.num_1s();
       const linkVal = new Int32Array(tr.louds.size).fill(-1);
@@ -298,17 +317,17 @@ class Trie {
         if (sel[c] === undefined) continue;
         if (tr.link.bit(c)) { linkVal[c] = tr.baseByte(c) | (extras.get(rank) * 256); rank++; }
       }
-      return { sel, numNodes, linkVal };
+      return (tr._lm = { sel, numNodes, linkVal });
     };
 
     // up[c] = restoreNode(c) result (bottom-up); deepest trie first.
     const buildUp = (tr) => {
+      if (tr._up) return tr._up;
       const nx = tr.next;
       const upNext = nx ? buildUp(nx) : null;
       const { sel, numNodes, linkVal } = buildLevelMaps(tr);
       const numL1 = tr.numL1;
       const up = new Array(tr.louds.size);
-      const tail = tr.tail;
       const edge = (nid) => {
         const lv = linkVal[nid];
         if (lv === -1) { const u = new Uint8Array(1); u[0] = tr.baseByte(nid); return u; }
@@ -326,7 +345,7 @@ class Trie {
         out.set(ec, 0); out.set(pUp, ec.length);
         up[c] = out;
       }
-      return up;
+      return (tr._up = up);
     };
 
     // pref[c] = full key prefix from the trie root (final byte order).
@@ -359,7 +378,7 @@ class Trie {
     const n = trie.numKeys();
     const out = new Array(n);
     const terminal = trie.terminal;
-    terminal._buildSelect();
+    terminal._buildSelect1();
     for (let i = 0; i < n; i++) {
       const node = terminal.select1(i);
       out[i] = node === 0 ? '' : d16(pref[node]);

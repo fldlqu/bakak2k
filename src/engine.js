@@ -119,17 +119,26 @@ export class AqK2KDict {
     this.bySurface = new Map();
     const n = this.trie.numKeys();
     const surfaces = this.trie.allKeys();
+
+    // Pre-read MAP offsets into a typed array – one DataView read per offset
+    // instead of 2 per key during the decode loop.
+    const rels = new Uint32Array(n + 1);
+    for (let i = 0; i <= n; i++) rels[i] = u32(mapOff + i * 4);
+
+    let maxLen = 12;
     for (let i = 0; i < n; i++) {
       const key = surfaces[i];
-      const rel = u32(mapOff + i * 4);
-      const rel2 = u32(mapOff + (i + 1) * 4);
+      const rel = rels[i], rel2 = rels[i + 1];
       const records = decodeRecords(this.bytes, tokOff, tokSize, rel, rel2);
       if (records.length === 0) continue;
       let arr = this.bySurface.get(key);
       if (!arr) { arr = []; this.bySurface.set(key, arr); }
       arr.push({ id: i, records });
+      // Track max surface length inline (avoids the separate maxKeyLenFast pass).
+      const kl = key.length;
+      if (kl > maxLen) maxLen = kl;
     }
-    this.maxLen = maxKeyLenFast(surfaces);
+    this.maxLen = maxLen;
   }
 
   key(id) {

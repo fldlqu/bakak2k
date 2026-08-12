@@ -3,6 +3,7 @@ node_modules/
 
 # 实验/一次性脚本与探针输出（不随库上传，本地保留）
 scratch/
+analysis.zip
 
 # 官方 SDK zip 与解出词典（专有数据，README 明确不随仓库分发）
 *.zip
