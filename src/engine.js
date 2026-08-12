@@ -45,15 +45,14 @@ function decodeRecords(bytes, tokOff, tokSize, rel, rel2) {
     if (p + len > end) break;
     const accent = bytes[p + 6] & 0x3f;
     const isE7 = bytes[p] === 0xe7 && bytes[p + 1] === 0x83;
-    const codes = [];
+    let text = '';
     if (isE7) {
       const winEnd = p + len - 1;
       const winStart = winEnd - mora;
-      for (let j = winStart; j < winEnd; j++) codes.push(bytes[j]);
+      for (let j = winStart; j < winEnd; j++) text += CODE2KANA[bytes[j]] ?? '';
     } else {
-      for (let j = 0; j < mora; j++) codes.push(bytes[p + 7 + j]);
+      for (let j = 0; j < mora; j++) text += CODE2KANA[bytes[p + 7 + j]] ?? '';
     }
-    const text = codes.map((c) => CODE2KANA[c] ?? '').join('');
     if (text) recs.push({ text, accent, mora });
     p += len;
   }
@@ -61,11 +60,12 @@ function decodeRecords(bytes, tokOff, tokSize, rel, rel2) {
 }
 
 // Max UTF-16 length of any surface in the trie (caps scanning cost).
-function maxKeyLen(trie) {
+// Runs over the surfaces already decoded by allKeys().
+function maxKeyLenFast(keys) {
   let m = 0;
-  const n = Math.min(trie.numKeys(), 20000); // cap scan; real max reachable quickly
-  for (let i = 0; i < n; i++) {
-    try { const k = trie.key(i); if (k.length > m) m = k.length; } catch { /* ignore */ }
+  for (let i = 0; i < keys.length; i++) {
+    const l = keys[i].length;
+    if (l > m) m = l;
   }
   return Math.max(m, 12);
 }
@@ -129,7 +129,7 @@ export class AqK2KDict {
       if (!arr) { arr = []; this.bySurface.set(key, arr); }
       arr.push({ id: i, records });
     }
-    this.maxLen = maxKeyLen(this.trie);
+    this.maxLen = maxKeyLenFast(surfaces);
   }
 
   key(id) {

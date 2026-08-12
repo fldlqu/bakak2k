@@ -1352,40 +1352,317 @@ export function applyEvalMask(s) {
   return o;
 }
 
-function englishPhonemes(word) {
-  const PH = { th: 'ス', sh: 'シュ', ch: 'チ', ph: 'フ', wh: 'フ', ng: 'ング', ck: 'ック' };
-  const V = 'aeiouy';
-  const C2K = {
-    b: 'ブ', c: 'ク', d: 'ド', f: 'フ', g: 'グ', h: 'フ', j: 'ジ', k: 'ク',
-    l: 'ル', m: 'ム', n: 'ン', p: 'プ', q: 'ク', r: 'ル', s: 'ス', t: 'ト',
-    v: 'ブ', w: 'ワ', x: 'クス', z: 'ズ',
-  };
-  const V2K = { a: 'ア', e: 'エ', i: 'イ', o: 'オ', u: 'ウ' };
+const SPELLS_SHORT = 'cot cap sit six to ten red rid row rot hi no'.split(' ');
+
+// --- Syllable-driven fallback engine (ported from analysis/en2kana.js) ---
+
+const SUFFIX = [
+  ['izations', 'イゼイションズ'], ['ization', 'イゼイション'], ['ations', 'エーションズ'],
+  ['ation', 'エーション'], ['itions', 'イションズ'], ['ition', 'イション'],
+  ['tions', 'ションズ'], ['tion', 'ション'],
+  ['ments', 'メントス'], ['ment', 'メント'], ['nesses', 'ネスス'], ['ness', 'ネス'],
+  ['lessly', 'レスリー'], ['less', 'レス'], ['fully', 'フリー'], ['ful', 'フル'],
+  ['ability', 'アビリティー'], ['ibility', 'イビリティー'], ['ible', 'イブル'], ['able', 'エブル'],
+  ['ously', 'アスリー'], ['ious', 'アス'], ['ous', 'アス'], ['tely', 'トリー'],
+  ['tically', 'ティカリー'], ['ically', 'イカリー'], ['ical', 'イカル'],
+  ['logy', 'ロジー'], ['graphy', 'グラフィー'], ['phy', 'フィー'], ['istry', 'イストリー'],
+  ['ster', 'スター'], ['ist', 'リスト'], ['ism', 'ズム'],
+  ['tively', 'ティブリー'], ['tive', 'ティブ'], ['sive', 'スィブ'], ['ive', 'イブ'],
+  ['archy', 'アーキー'], ['cy', 'シー'], ['sy', 'シィ'], ['titude', 'ティチュード'],
+  ['itude', 'イチュード'], ['ty', 'ティー'], ['ly', 'リー'], ['ry', 'リー'],
+  ['gy', 'ジー'], ['al', 'アル'], ['ian', 'イアン'], ['ion', 'イオン'],
+  ['ors', 'アーズ'], ['or', 'オー'], ['ars', 'アーズ'], ['ar', 'アー'],
+  ['ery', 'アリー'], ['er', 'アー'], ['ears', 'アーズ'],
+].sort((a, b) => b[0].length - a[0].length);
+
+const VTOK = [
+  ['eigh', 'エイ'], ['ough', 'フ'], ['eau', 'オー'],
+  ['au', 'オー'], ['aw', 'オー'], ['ee', 'イー'], ['oo', 'ウー'], ['oa', 'オー'],
+  ['ou', 'アウ'], ['ow', 'アウ'], ['ai', 'エー'], ['ay', 'エー'], ['ei', 'エイ'],
+  ['ie', 'イー'], ['ew', 'ユー'], ['oi', 'オイ'], ['oy', 'オイ'], ['igh', 'イ'],
+  ['air', 'エア'], ['ear', 'イア'], ['eer', 'イア'], ['our', 'アー'], ['ure', 'アー'],
+  ['are', 'アー'], ['ere', 'アー'], ['ore', 'オー'], ['ire', 'アイア'], ['ue', 'ユー'],
+  ['ua', 'ウア'], ['ui', 'ウイ'], ['uo', 'ウオ'], ['ae', 'エー'],
+  ['ea', 'イー'], ['io', 'イオ'], ['ia', 'イア'], ['eo', 'エオ'],
+  ['iu', 'イウ'], ['eu', 'ユー'], ['oe', 'オエ'],
+].sort((a, b) => b[0].length - a[0].length);
+
+const CTOK = [
+  ['psy', 'サイ'], ['sci', 'サイ'], ['tch', 'ッチ'], ['dge', 'ッジ'], ['nge', 'ンジ'], ['sch', 'シチ'],
+  ['sh', 'シュ'], ['ch', 'チ'], ['ck', 'ック'], ['ph', 'フ'], ['th', 'ス'],
+  ['gh', ''], ['ng', 'ング'], ['mb', 'ンブ'], ['kn', 'ノ'], ['wr', 'ル'],
+  ['wh', 'ウ'], ['qu', 'ク'], ['ps', 'ス'], ['pn', 'ノ'],
+  ['ss', 'ス'], ['ll', 'ル'], ['tt', 'ット'], ['dd', 'ッド'], ['bb', 'ブ'],
+  ['pp', 'プ'], ['ff', 'フ'], ['rr', 'ル'], ['nn', 'ン'], ['mm', 'ム'],
+  ['gg', 'グ'], ['cc', 'ック'],
+].sort((a, b) => b[0].length - a[0].length);
+
+const CV = {
+  b: { a: 'バ', e: 'ベ', i: 'ビ', o: 'ボ', u: 'ブ' },
+  c: { a: 'カ', e: 'セ', i: 'シ', o: 'コ', u: 'ク', y: 'シ' },
+  d: { a: 'ダ', e: 'デ', i: 'ディ', o: 'ド', u: 'ドゥ' },
+  f: { a: 'ファ', e: 'フェ', i: 'フィ', o: 'フォ', u: 'フ' },
+  g: { a: 'ガ', e: 'ジェ', i: 'ギ', o: 'ゴ', u: 'グ', y: 'ジ' },
+  h: { a: 'ハ', e: 'ヘ', i: 'ヒ', o: 'ホ', u: 'フ' },
+  j: { a: 'ジャ', e: 'ジェ', i: 'ジ', o: 'ジョ', u: 'ジュ' },
+  k: { a: 'カ', e: 'ケ', i: 'キ', o: 'コ', u: 'ク' },
+  l: { a: 'ラ', e: 'レ', i: 'リ', o: 'ロ', u: 'ル' },
+  m: { a: 'マ', e: 'メ', i: 'ミ', o: 'モ', u: 'ム' },
+  n: { a: 'ナ', e: 'ネ', i: 'ニ', o: 'ノ', u: 'ヌ' },
+  p: { a: 'パ', e: 'ペ', i: 'ピ', o: 'ポ', u: 'プ' },
+  q: { a: 'クア', e: 'クエ', i: 'クイ', o: 'クオ', u: 'クウ' },
+  r: { a: 'ラ', e: 'レ', i: 'リ', o: 'ロ', u: 'ル' },
+  s: { a: 'サ', e: 'セ', i: 'シ', o: 'ソ', u: 'ス', y: 'シ' },
+  t: { a: 'タ', e: 'テ', i: 'ティ', o: 'ト', u: 'ツ' },
+  v: { a: 'バ', e: 'ベ', i: 'ビ', o: 'ボ', u: 'ブ' },
+  w: { a: 'ワ', e: 'ウェ', i: 'ウィ', o: 'ウォ', u: 'ウ' },
+  x: { a: 'クサ', e: 'クセ', i: 'クシ', o: 'クソ', u: 'クス' },
+  y: { a: 'ヤ', e: 'イェ', i: 'イ', o: 'ヨ', u: 'ユ' },
+  z: { a: 'ザ', e: 'ゼ', i: 'ジ', o: 'ゾ', u: 'ズ' },
+};
+const VOW = 'aeiouy';
+const COREV = 'aeiou';
+
+// Word-final consonant clusters map to fixed kana (data-mined, high agreement).
+const FINAL_CTOK = [
+  ['nt', 'ント'], ['st', 'スト'], ['nd', 'ンド'], ['ng', 'ング'], ['nk', 'ンク'],
+  ['rd', 'ード'], ['rt', 'ート'], ['ld', 'ルド'], ['rm', 'ーム'], ['rk', 'ーク'],
+  ['sk', 'スク'], ['ct', 'クト'], ['lt', 'ルト'], ['wn', 'ウン'],
+].sort((a, b) => b[0].length - a[0].length);
+const LONG = { a: 'エー', e: 'イー', i: 'アイ', o: 'オー', u: 'ユー' };
+const SHORT = { a: 'ア', e: 'エ', i: 'イ', o: 'オ', u: 'ア' };
+
+export function en2kanaRules(word) {
   const w = word.toLowerCase();
   let out = '';
   let i = 0;
-  while (i < w.length) {
-    let hit = false;
-    for (const d of [3, 2, 1]) {
-      const g = w.slice(i, i + d);
-      if (PH[g]) { out += PH[g]; i += d; hit = true; break; }
+  const n = w.length;
+  const isV = (c) => VOW.includes(c);
+  const isC = (c) => COREV.includes(c);
+
+  while (i < n) {
+    const rest = w.slice(i);
+
+    // short closed C-C-y (dry/fly/sky/spy/try) -> CV[C].a + 'イ' (ドライ)
+    if (n === 3 && i === 1 && w[2] === 'y') {
+      out += (CV[w[1]] ? CV[w[1]].a : '') + 'イ'; break;
     }
-    if (hit) continue;
+
+    // 1) suffix
+    let suf = null;
+    for (const [t, k] of SUFFIX) if (rest === t) { suf = [t, k]; break; }
+    if (suf) { out += suf[1]; i += suf[0].length; break; }
+
+    // 2) vowel
+    if (isC(w[i])) {
+      let v1 = null;
+      for (const [t, k] of VTOK) if (rest.startsWith(t)) { v1 = [t, k]; break; }
+      if (v1) { out += v1[1]; i += v1[0].length; continue; }
+      const ch = w[i];
+      // V + r + consonant -> long (arch->アーチ, corner->コーナー, card->カルト excluded
+      // as it is a rare short; arr/rr not matched -> アレ/エル handled elsewhere)
+      if ((ch === 'a' || ch === 'o' || ch === 'e') && w[i + 1] === 'r' && w[i + 2] !== undefined && !isV(w[i + 2]) && w[i + 2] !== 'r') {
+        const lon = { a: 'アー', o: 'オー', e: 'アー' }[ch];
+        out += lon; i += 2; continue;
+      }
+      // CVCe long
+      if (i + 1 < n && !isV(w[i + 1]) && i + 2 === n - 1 && w[n - 1] === 'e') {
+        out += LONG[ch]; i++; continue;
+      }
+      // word-final single vowel
+      if (i === n - 1) {
+        if (ch === 'e') { i++; break; }
+        out += ch === 'o' ? 'オ' : ch === 'i' ? 'イ' : ch === 'y' ? 'イ' : ch === 'a' ? 'ア' : 'ウ';
+        i++; continue;
+      }
+      // word-final open(e)
+      if (i === n - 2 && w[i + 1] === 'e') { out += LONG[ch]; i += 2; break; }
+      // general short read
+      out += SHORT[ch]; i++; continue;
+    }
+
+    // 3) y
+    if (w[i] === 'y') { out += 'イ'; i++; continue; }
+
+    // word-final C+y -> CV[C].i + ー (party->パーティー, body->ボディー, copy->コピー)
+    // except short closed C-C-y (dry/fly/sky/spy/try) -> CV[C].a + 'イ' (ドライ)
+    if (i === n - 2 && w[i + 1] === 'y') {
+      const ci = CV[w[i]] ? CV[w[i]].i : '';
+      if (n === 3) { out += (CV[w[i]] ? CV[w[i]].a : '') + 'イ'; i += 2; continue; }
+      out += ci + 'ー'; i += 2; continue;
+    }
+
+    // suffix must also win here: a trailing -tion etc can begin mid-word with a
+    // consonant (plication->プリケーション) because section 4/5 would eat the 't'.
+    {
+      let suf2 = null;
+      for (const [t, k] of SUFFIX) if (rest === t) { suf2 = [t, k]; break; }
+      if (suf2) { out += suf2[1]; i += suf2[0].length; break; }
+    }
+
+    // 4) consonant cluster + following vowel cluster
+    {
+      let cc = null;
+      for (const [t, k] of CTOK) if (rest.startsWith(t)) { cc = [t, k]; break; }
+      if (cc) {
+        const cl = cc[0].length;
+        const sub = w.slice(i + cl);
+        // -nger/-ngar: nasal n + g{er|ar} (danger->ダンガー, finger->フィンガー)
+        if (cc[0] === 'nge' && (sub === 'r' || sub === 'ar')) {
+          out += 'ン'; i += 1; continue;
+        }
+        if (sub && isC(sub[0])) {
+          let v1 = null;
+          for (const [t, k] of VTOK) if (sub.startsWith(t)) { v1 = [t, k]; break; }
+          if (v1) {
+            if (sub.startsWith('ea') && !sub.startsWith('ear')) { out += cc[1]; i += cl + 2; continue; }
+            out += cc[1]; i += cl + v1[0].length; continue;
+          }
+          out += cc[1]; i += cl; continue;
+        } else {
+          out += cc[1]; i += cl; continue;
+        }
+      }
+    }
+
+    // 5) single consonant + vowel(cluster)
+    {
+      const nx = i + 1 < n ? w[i + 1] : '#';
+      if (isC(nx)) {
+        // word-final C{er|or|ar} (danger->ダンガー, doctor->ドクター, car->カー)
+        if (i + 2 === n - 1 && (w[i + 1] === 'e' || w[i + 1] === 'o' || w[i + 1] === 'a') && w[i + 2] === 'r') {
+          let ck = CV[w[i]] ? CV[w[i]].a : '';
+          if (ck.length > 0 && ck.slice(-1) === 'ア') ck = ck.slice(0, -1);
+          out += ck + 'ー';
+          i += 3;
+          continue;
+        }
+        const sub = w.slice(i + 1);
+        let v1 = null;
+        for (const [t, k] of VTOK) if (sub.startsWith(t)) { v1 = [t, k]; break; }
+        if (v1) {
+          let ck = CV[w[i]] ? CV[w[i]][sub[0]] : '';
+          // ea: C+ea -> C+イー (beach->ビーチ); C+ear -> C+イア (bear->ビアー)
+          if (sub.startsWith('ea')) {
+            const ci = CV[w[i]] ? CV[w[i]].i : '';
+            if (sub.startsWith('ear')) { out += ci + 'アー'; i += 1 + 3; continue; }
+            out += ci + 'ー'; i += 1 + 2; continue;
+          }
+          // ee: C+ee -> C+イー (keep->キープ, deep->ディープ)
+          if (sub.startsWith('ee')) {
+            const ci = CV[w[i]] ? CV[w[i]].i : '';
+            out += ci + 'ー'; i += 1 + 2; continue;
+          }
+          // ia/io: C+ia -> C+イア (media->メディア, bacteria->バクテリア);
+          // C+io -> C+イオ (radio->ラジオ)
+          if (sub.startsWith('ia')) { out += (CV[w[i]] ? CV[w[i]].i : '') + 'ア'; i += 1 + 2; continue; }
+          if (sub.startsWith('io')) { out += (CV[w[i]] ? CV[w[i]].i : '') + 'オ'; i += 1 + 2; continue; }
+          // oo: C+oo -> C+ウー (cool->クール, food->フード, pool->プール);
+          // short oo before doubled k/d/t/f (book/cook/look/good/foot) -> C+ウ + 促音
+          if (sub.startsWith('oo')) {
+            const cu = CV[w[i]] ? CV[w[i]].u : '';
+            const a2 = sub[2], a3 = sub[3];
+            if ((a2 === 'k' && a3 === 'k') || (a2 === 'd' && a3 === 'd') || (a2 === 't' && a3 === 't')) {
+              out += cu + 'ッ';
+              i += 1 + 2;
+              continue;
+            }
+            if (a2 === 'k' && a3 === undefined) { out += cu + 'ッ'; i += 1 + 2; continue; }
+            if (a2 === 'd' && a3 === undefined) { out += cu + 'ッ'; i += 1 + 2; continue; }
+            if (a2 === 't' && i + 3 === n - 1) { // foot/football-ish word-final -oot
+              out += cu + 'ッ';
+              i += 1 + 2;
+              continue;
+            }
+            out += cu + 'ー'; i += 1 + 2; continue;
+          }
+          out += ck + v1[1];
+          i += 1 + v1[0].length;
+          continue;
+        }
+        // nce/nce-final: c+e after n -> ス (dance->ダンス, fence->フェンス, since->シンス)
+        if (w[i] === 'c' && nx === 'e' && w[i - 1] === 'n') {
+          out += 'ス'; i += 2; continue;
+        }
+        // C + V + r + C -> long (corner->コーナー, garden->ガーデン, force->フォース)
+        // rare short exceptions: card, modern, certificate
+        if (w[i + 2] === 'r' && w[i + 3] !== undefined && !isV(w[i + 3]) && w[i + 3] !== 'r') {
+          const ex = w.slice(i, i + 4);
+          if (ex !== 'card' && ex !== 'dern' && ex !== 'cert') {
+            const segv = CV[w[i]] ? CV[w[i]][nx] : '';
+            out += segv + 'ー'; i += 3; continue;
+          }
+        }
+        let seg = CV[w[i]] ? CV[w[i]][nx] : '';
+        out += seg; i += 2; continue;
+      }
+    }
+
+    // 5.5) word-final consonant cluster (nt/st/nd/ng/nk/rd/rt/ld/rm/sk/ct/lt/wn...)
+    // must be matched whole, otherwise the tail is consumed letter-by-letter wrongly.
+    {
+      let f = null;
+      for (const [t, k] of FINAL_CTOK) if (rest === t) { f = [t, k]; break; }
+      if (f) {
+        // card is the rare short exception (card->カルト); all other -ard -> ード
+        if (f[0] === 'rd' && rest === 'rd' && w === 'card') {
+          out += 'ルト';
+          i += 2;
+          break;
+        }
+        out += f[1];
+        i += f[0].length;
+        break;
+      }
+    }
+
+    // 6) word-final / single consonant
     const c = w[i];
-    if (V.includes(c)) {
-      out += V2K[c] ?? '';
-      const nx = w[i + 1];
-      if (nx === c && (c === 'e' || c === 'o')) { out += 'ー'; i += 2; continue; }
-      i++;
-    } else {
-      out += C2K[c] ?? '';
-      i++;
+    let end = '';
+    if (c === 'n') end = 'ン';
+    else if (c === 'm') end = 'ム';
+    else if (c === 's') end = 'ス';
+    else if (c === 'd') end = 'ド';
+    else if (c === 't') end = 'ト';
+    else if (c === 'r') end = 'ル';
+    else if (c === 'l') end = 'ル';
+    else if (c === 'k') end = '';
+    else if (c === 'g') end = 'グ';
+    else if (c === 'f') end = 'フ';
+    else if (c === 'p') end = 'プ';
+    else if (c === 'b') end = 'ブ';
+    else if (c === 'x') end = 'クス';
+    else if (c === 'z') end = 'ズ';
+    else if (c === 'v') end = 'ブ';
+    else if (c === 'h') end = '';
+    else if (c === 'w') end = 'ウ';
+    else if (c === 'c') end = 'ク';
+    // Sokuon: word-final t/p/k (or c) after a short vowel in a CVC or VV(short)
+    // tail -> geminate (cat->キャット, drop->ドロップ, book->ブック, about->アバウット).
+    // Avoid long-vowel digraphs (ea/ee/oo/oa/sou/ai/ay) -> beat/keep/foot/soup stay long.
+    if (i === n - 1 && (c === 't' || c === 'p' || c === 'k' || c === 'c')) {
+      const pv = w[i - 1];
+      const prev = w[i - 2];
+      const isShortDigraph = (pv === 'o' && prev === 'u') || (pv === 'w' && prev === 'o'); // ou/ow
+      if (COREV.includes(pv) && (isShortDigraph || (prev !== undefined && !VOW.includes(prev)))) {
+        if (!(pv === 'e' && w[i - 3] === 'e') && !(pv === 'e' && w[i - 3] === 'a')) {
+          end = 'ッ' + end;
+        }
+      }
     }
+    // word-final k after ee/ea/oo keeps ク (week->ウィーク, seek->シーク) but
+    // short-vowel k was already geminated above or silent elsewhere (dark->ダーク).
+    if (c === 'k' && i === n - 1) {
+      const pv = w[i - 1];
+      const prev = w[i - 2];
+      if ((pv === 'e' && prev === 'e') || (pv === 'e' && prev === 'a') || (pv === 'o' && prev === 'o')) {
+        end = 'ク';
+      }
+    }
+    out += end; i++;
   }
   return out;
 }
-
-const SPELLS_SHORT = 'cot cap sit six to ten red rid row rot hi no'.split(' ');
 
 export function englishToKana(word) {
   const lower = word.toLowerCase();
@@ -1398,5 +1675,5 @@ export function englishToKana(word) {
     if (WORD_TABLE.has(clean)) return WORD_TABLE.get(clean);
     return [...clean].map((c) => LETTER_NAME[c.toUpperCase()]).join('');
   }
-  return englishPhonemes(clean);
+  return en2kanaRules(clean);
 }

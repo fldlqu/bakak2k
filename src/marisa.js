@@ -61,6 +61,7 @@ class BitVector {
     return n;
   }
   _buildSelect() {
+    if (this._sel1 !== null) return;
     const n1 = this.count1;
     this._sel1 = new Uint32Array(n1);
     this._sel0 = new Uint32Array(this.size - n1);
@@ -131,18 +132,31 @@ export class Marisa {
     const size = this.u64();
     const bytes = this.u8;
     const unitsStart = units.start;
-    const get = (i) => {
-      if (valueSize === 0) return 0;
-      const pos = BigInt(i) * BigInt(valueSize);
-      const unit = Number(pos >> 6n);
-      const off = Number(pos & 63n);
-      const w0 = readWord(bytes, unitsStart + unit * 8);
-      if (BigInt(off) + BigInt(valueSize) <= 64n) {
-        return Number((w0 >> BigInt(off)) & ((1n << BigInt(valueSize)) - 1n));
-      }
-      const w1 = readWord(bytes, unitsStart + (unit + 1) * 8);
-      return Number(((w0 >> BigInt(off)) | (w1 << BigInt(64 - off))) & ((1n << BigInt(valueSize)) - 1n));
-    };
+    let get;
+    if (valueSize === 0) {
+      get = () => 0;
+    } else if (valueSize === 8) {
+      get = (i) => bytes[unitsStart + i];
+    } else if (valueSize === 16) {
+      get = (i) => bytes[unitsStart + 2 * i] | (bytes[unitsStart + 2 * i + 1] << 8);
+    } else if (valueSize === 32) {
+      get = (i) => {
+        const o = unitsStart + 4 * i;
+        return bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24);
+      };
+    } else {
+      get = (i) => {
+        const pos = BigInt(i) * BigInt(valueSize);
+        const unit = Number(pos >> 6n);
+        const off = Number(pos & 63n);
+        const w0 = readWord(bytes, unitsStart + unit * 8);
+        if (BigInt(off) + BigInt(valueSize) <= 64n) {
+          return Number((w0 >> BigInt(off)) & ((1n << BigInt(valueSize)) - 1n));
+        }
+        const w1 = readWord(bytes, unitsStart + (unit + 1) * 8);
+        return Number(((w0 >> BigInt(off)) | (w1 << BigInt(64 - off))) & ((1n << BigInt(valueSize)) - 1n));
+      };
+    }
     return { valueSize, mask, size, get };
   }
 
@@ -255,7 +269,7 @@ class Trie {
       nodeId = this.louds.select1(nodeId) - nodeId - 1;
     }
   }
-  allKeys() {
+  allKeysInfo() {
     // Fast bulk enumeration: build per-node prefix ropes once (bottom-up), then
     // O(1) per key. ~1.8x faster than calling key() per id on this corpus.
     const trie = this;
@@ -350,7 +364,11 @@ class Trie {
       const node = terminal.select1(i);
       out[i] = node === 0 ? '' : d16(pref[node]);
     }
-    return out;
+    return { keys: out, pref, terminal };
+  }
+
+  allKeys() {
+    return this.allKeysInfo().keys;
   }
 }
 
