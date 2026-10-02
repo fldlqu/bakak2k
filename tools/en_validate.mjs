@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { englishToKana, applyEvalMask } from '../src/en_rules.js';
+import { englishToKana, applyEvalMask } from '../core/en_rules.js';
 
 const corpus = JSON.parse(readFileSync(new URL('../test/en_corpus.json', import.meta.url))).dll;
 

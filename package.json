@@ -3,9 +3,9 @@
   "version": "0.1.1",
   "description": "Pure-JS Japanese text -> reading kana (kanji2koe-style) engine that decodes a user-provided aqdic dictionary, with English and numeral reading support.",
   "type": "module",
-  "main": "src/index.js",
+  "main": "core/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./core/index.js"
   },
   "scripts": {
     "serve": "node tools/serve.mjs",

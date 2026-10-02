@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { englishToKana, applyEvalMask, WORD_TABLE } from '../src/en_rules.js';
+import { englishToKana, applyEvalMask, WORD_TABLE } from '../core/en_rules.js';
 
 const norm = (s) => s.replace(/[、。’‘_/.,']/g, '');
 const corpus = JSON.parse(readFileSync(new URL('../test/en_corpus.json', import.meta.url))).dll;

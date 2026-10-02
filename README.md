@@ -45,7 +45,7 @@ JSZip 只有 UMD 构建。**不用打包器**直接在页面里跑时，加一�
   { "imports": { "jszip": "./js/jszip-wrapper.mjs" } }
 </script>
 <script type="module">
-  import { createDictAuto } from './src/index.js';
+  import { createDictAuto } from './core/index.js';
   const zip = new Uint8Array(await fetch('aqk2k_win_413.zip').then(r => r.arrayBuffer()));
   const dict = await createDictAuto(zip);   // 内部用 JSZip 解出 aqdic.bin
   console.log(dict.toKana('東京都渋谷区'));  // トーキョートシブヤク
@@ -82,9 +82,9 @@ zip64 / data descriptor / 各种 flag 组合都能正确处理。
 
 ### 英文
 
-连续 `[A-Za-z]` 串按类 AqKanji2Koe 的英语规则处理（`src/en_rules.js`）：
+连续 `[A-Za-z]` 串按类 AqKanji2Koe 的英语规则处理（`core/en_rules.js`）：
 
-- 词表命中 → 词读（`src/en_rules.js` WORD_TABLE，约 1300 词，采集自 SDK DLL 掩码语料）
+- 词表命中 → 词读（`core/en_rules.js` WORD_TABLE，约 1300 词，采集自 SDK DLL 掩码语料）
 - 未命中且 ≤3 字母 → 逐字母名拼读（`PC` → `ピーシー`、`go` → `ジーオー`）
 - 其余 → g2p 兜底
 
@@ -93,7 +93,7 @@ zip64 / data descriptor / 各种 flag 组合都能正确处理。
 
 ### 数字
 
-`src/num.js` 把阿拉伯数字串转成读音假名，规则对齐 DLL 的分界：
+`core/num.js` 把阿拉伯数字串转成读音假名，规则对齐 DLL 的分界：
 
 | 输入 | 输出 | DLL 行为 |
 | --- | --- | --- |
@@ -115,7 +115,7 @@ zip64 / data descriptor / 各种 flag 组合都能正确处理。
 - `mora 数 = moraByte & 0x1f`
 - 附加字节数 = `flag & 0x0f`（`0x44/0x45` 时有特殊的 -1 规则）
 - 尾部读 kana 码右对齐的 `e7 83` 前缀记录按右侧对齐规则读
-- kana 码表见 `src/kana.js`（来源：逆向 aqk2k_win_413/lib 相关常量）
+- kana 码表见 `core/kana.js`（来源：逆向 aqk2k_win_413/lib 相关常量）
 
 ## 用户词典（aq_user.dic）
 

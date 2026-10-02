@@ -18,3 +18,5 @@ aqk2k_ex/
 .DS_Store
 Thumbs.db
 desktop.ini
+# 本项目: 本地词典/探针/patch (专有数据与临时产物, 不进 git)
+work/

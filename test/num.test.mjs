@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { kanaFromNumber, matchNumber, kanaInt } from '../src/num.js';
+import { kanaFromNumber, matchNumber, kanaInt } from '../core/num.js';
 
 test('kanaInt: value reading with place units', () => {
   assert.equal(kanaInt('0'), 'ゼロ');
