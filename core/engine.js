@@ -147,7 +147,9 @@ function decodeRecords(bytes, tokOff, tokSize, rel, rel2) {
         junc = new Array(jcnt);
         for (let j = 0; j < jcnt; j++) junc[j] = bytes[joff + j];
       }
-      recs.push({ text, accent, mora, cost, pos, flag, jcnt, junc });
+      // moraByte / accByte は record の生バイト (+5 / +6)。公式 DLL のアクセント句境界
+      // 分類器 (RVA 0xbc00) は この 2 バイトのビット 5 を読む (mb & 0x20 / ab & 0x60)。
+      recs.push({ text, accent, mora, cost, pos, flag, jcnt, junc, moraByte: mb, accByte: bytes[p + 6] });
     }
     p += len;
   }
@@ -444,6 +446,8 @@ export class AqK2KDict {
       flag: t.reading?.flag ?? null,
       jcnt: t.reading?.jcnt ?? 0,
       junc: t.reading?.junc ?? null,
+      moraByte: t.reading?.moraByte ?? null,
+      accByte: t.reading?.accByte ?? null,
     }));
   }
 

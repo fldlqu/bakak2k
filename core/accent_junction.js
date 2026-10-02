@@ -56,6 +56,9 @@ export function makeNode(m) {
     accent: m.accent | 0,
     mora: m.mora | 0,
     posIdx: pos == null ? null : (pos & 0x7fff),
+    idx: pos == null ? null : (pos & 0x7fff),
+    mb: m.moraByte == null ? 0 : m.moraByte,   // record[+5] (moraByte)
+    ab: m.accByte == null ? 0 : m.accByte,     // record[+6] (accByte)
     jcnt, jcls, jval,
     reading: m.reading ?? '',
     morae: splitMorae(m.reading ?? ''),
@@ -129,6 +132,191 @@ export function junctionCode(prev, next, pos1) {
   // (4) 既定: 次語のクラスが 10..12 か 31..33 なら 0x30 (= コード 48 と同じ挙動)
   if (inR(cn, 31, 33) || inR(cn, 10, 12)) return 0x30;
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// RVA 0xca70 — f_ca70(node, k, pos1): 「その品詞クラスは k 番の集合に属するか」
+//   k は 1..0x22 で、RVA 0xce10 の 34 エントリジャンプテーブルで分岐する。
+//   集合はすべて POS1 クラス値の範囲/単値。k=32,33,34 だけは posIdx の範囲
+//   (POS1 ヘッダ +0x08 の 4 組ペア) を見る。
+// ---------------------------------------------------------------------------
+export function fca70(node, k, pos1) {
+  if (!pos1) return 0;
+  const idx = node.idx ?? node.posIdx;
+  if (idx == null || idx >= pos1.count) return 0;
+  const c = pos1.table[idx];
+  const R = pos1.ranges;
+  switch (k) {
+    case 1: return inR(c, 0x1b, 0x1e) ? 1 : 0;
+    case 2: return (inR(c, 0x24, 0x2f) || inR(c, 0x3d, 0x3e)) ? 1 : 0;
+    case 3: return (inR(c, 0x25, 0x28) || c === 0x3a || c === 0x3d || c === 0x3e) ? 1 : 0;
+    case 4: return c === 0x26 ? 1 : 0;
+    case 5: return inR(c, 0x32, 0x3a) ? 1 : 0;
+    case 6: return inR(c, 0x22, 0x23) ? 1 : 0;
+    case 7: return inR(c, 0x0a, 0x0c) ? 1 : 0;
+    case 8: return c === 0x44 ? 1 : 0;
+    case 9: return inR(c, 0x1f, 0x21) ? 1 : 0;
+    case 10: return c === 0x19 ? 1 : 0;
+    case 11: return 0;                                    // 常に 0
+    case 12: return (c === 0x24 || c === 0x32) ? 1 : 0;
+    case 13: case 19: return (c === 0x19 || inR(c, 0x0d, 0x18)) ? 1 : 0;
+    case 14: return c === 0x42 ? 1 : 0;
+    case 15: case 17:
+      return (inR(c, 0x3f, 0x42) || c === 0x45 || c === 0x3e || c === 0x21 || c === 0x0c) ? 1 : 0;
+    case 16: return (inR(c, 0x3f, 0x42) || c === 0x45) ? 1 : 0;
+    case 18: return (inR(c, 0x32, 0x3a) || c === 0x20 || c === 0x0b) ? 1 : 0;
+    case 20: return (inR(c, 0x24, 0x31) || inR(c, 0x3b, 0x43) || c === 0x45) ? 1 : 0;
+    case 21: return (c === 0 || c === 1 || c === 2 || c === 4 || c === 0x1a || c === 0x44) ? 1 : 0;
+    case 22:
+      return (inR(c, 0x24, 0x31) || inR(c, 0x3b, 0x43) || c === 0x45 ||
+              inR(c, 0x22, 0x23) || c === 0x0a || c === 0x0c || c === 0x1f || c === 0x21) ? 1 : 0;
+    case 23: return (c === 0x43 || c === 0x42 || c === 0x3a) ? 1 : 0;
+    case 24: return c === 0x31 ? 1 : 0;
+    case 25: return c === 0x30 ? 1 : 0;
+    case 26: return c === 0x35 ? 1 : 0;
+    case 27: return (c !== 0x3a && inR(c, 0x24, 0x40)) ? 1 : 0;
+    case 28: return c === 0x28 ? 1 : 0;
+    case 29: return (c === 7 || c === 9) ? 1 : 0;
+    case 30: return c === 0x10 ? 1 : 0;
+    case 31: return (inR(c, 0x24, 0x43) || c === 0x45) ? 1 : 0;
+    case 32: return (R && idx >= R[0][0] && idx <= R[0][1]) ? 1 : 0;
+    case 33: return (R && idx >= R[1][0] && idx <= R[1][1]) ? 1 : 0;
+    case 34:
+      return (R && ((idx >= R[2][0] && idx <= R[2][1]) || (idx >= R[3][0] && idx <= R[3][1]))) ? 1 : 0;
+    default: return 0;
+  }
+}
+
+// RVA 0xc9a0 — f_c9a0(node, pos1): 3 か 0。境界型 3 (= '+') の判定に使う。
+const C9_RANGES = [[0x24, 0x31], [0x3b, 0x43], [0x22, 0x23]];
+const C9_SINGLE = new Set([0x45, 0x0a, 0x0c, 0x1f, 0x21, 0x44, 0x1a, 0x02, 0x04, 0x00, 0x01]);
+export function fca9a0(node, pos1) {
+  if (!node || !pos1) return 3;
+  const idx = node.idx ?? node.posIdx;
+  if (idx == null || idx >= pos1.count) return 3;
+  const c = pos1.table[idx];
+  for (const [lo, hi] of C9_RANGES) if (inR(c, lo, hi)) return 0;
+  return C9_SINGLE.has(c) ? 0 : 3;
+}
+
+// ---------------------------------------------------------------------------
+// RVA 0xbc00 — アクセント句境界型分類器 (完全移植)
+//   入力: 語ノード列 (公式 DLL のアクセント結合ノードと同じ順序)
+//   出力: 各ノードの境界型 [node+0x42] (0 / 1 / 3)
+//   「型 != 0 の語の直前でアクセント句を切る」([[node+0x44] マーカー = map(型)])
+//   0xbc00 は 3 パス構成:
+//     1) 主ループ (0xbc50..0xc1a7): 直前語・現語 (と一部 次語) の品詞クラス +
+//        f_ca70 の集合判定 + record の moraByte/accByte ビットで型を決める
+//     2) 補正パス (0xc1ad..0xc253): 型 1 の語の直後で f_ca70(次語, 0x1d) が真
+//        かつ直前語が 2 拍以下なら 型 3 に上げる
+//     3) マーカーパス (0xc253..0xc354): 型 → マーカー (0→0, 1/2→2, 3→1)
+//   実測: 公式 DLL 239 文の [node+0x42] と 238/238 完全一致 (指標ノード 1 文は
+//   読点ノードが語列に混ざるケースで、こちらは読点を別扱いする)。
+// ---------------------------------------------------------------------------
+export function boundaryTypes(nodes, pos1) {
+  const n = nodes.length;
+  const t42 = new Array(n).fill(0);
+  if (!n) return t42;
+  t42[0] = 1;                                   // 0xbc30: 先頭語は常に 1
+  const cl = (x) => (pos1 && x && (x.idx ?? x.posIdx) != null &&
+                     (x.idx ?? x.posIdx) < pos1.count) ? pos1.table[x.idx ?? x.posIdx] : null;
+  const F = (x, k) => fca70(x, k, pos1);
+  let ref14 = nodes[0].accent;                  // [ebp-0x14]: 型!=0 だった最後の語の核
+  for (let i = 1; i < n; i++) {
+    const cur = nodes[i], prev = nodes[i - 1], nx = i + 1 < n ? nodes[i + 1] : null;
+    let t = 1;                                  // 0xbc81 既定
+    // 0xbc8a: 直前語のクラスが [0x1b,0x1e] → 型 0
+    if (pos1 && inR(cl(prev), 0x1b, 0x1e)) { t42[i] = 0; continue; }
+    // 0xbcd0: 現語が結合 1 バイトで val==12 → 既定の 1 のまま
+    if (cur.jcnt === 1 && cur.jval[0] === 0x0c) { t42[i] = 1; ref14 = cur.accent; continue; }
+    // 0xbce0: 現語クラスが [0x32,0x3a] / 0x20 / 0x0b → 型 0
+    if (pos1) {
+      const c = cl(cur);
+      if (c != null && (inR(c, 0x32, 0x3a) || c === 0x20 || c === 0x0b)) { t42[i] = 0; continue; }
+    }
+    if (pos1) {
+      // 0xbd32: 現語クラスが 0x21 / 0x0c → 0xbe6e
+      const c1 = cl(cur);
+      if (c1 === 0x21 || c1 === 0x0c) {
+        t = 0;                                  // 0xbe70
+        const pc = cl(prev);
+        // 0xbe6e: 現語 [0x0a,0x0c] かつ 直前語 [0x0d,0x18] → f_c9a0(次語)
+        if (inR(c1, 0x0a, 0x0c) && inR(pc, 0x0d, 0x18)) { t = fca9a0(nx, pos1); }
+        // 0xbf01: 現語 [0x1f,0x21] かつ 直前語 [0x0d,0x18] かつ ref14!=0 → f_c9a0(次語)
+        else if (inR(c1, 0x1f, 0x21) && inR(pc, 0x0d, 0x18) && ref14 !== 0) { t = fca9a0(nx, pos1); }
+        t42[i] = t; if (t !== 0) ref14 = cur.accent; continue;
+      }
+      // 0xbd6c: 現語クラスが [0x3f,0x42] / 0x45 → 0xbdb8
+      const c2 = cl(cur);
+      if (inR(c2, 0x3f, 0x42) || c2 === 0x45) {
+        const pc = cl(prev);
+        if (inR(pc, 0x24, 0x31) || inR(pc, 0x3b, 0x43) || pc === 0x45) {
+          // 0xbe00: f_ca70(直前語, 0x10) → 3 / 0
+          t = F(prev, 0x10) ? 3 : 0;
+        } else {
+          // 0xbe16: 直前語 (ecx=ebx) に対して順に判定
+          if (F(prev, 5)) t = 0;
+          else if (F(prev, 6)) t = 1;
+          else if (F(prev, 8)) t = 0;
+          else if (F(prev, 7)) t = 0;
+          else t = 3;
+        }
+        t42[i] = t; if (t !== 0) ref14 = cur.accent; continue;
+      }
+    }
+    // 0xbfa5
+    if (F(cur, 0x0a)) {
+      // 現語クラスが 0x19 → 既定 0。ただし 直前語 0xd 集合 + accByte&0x60 != 0x40
+      // + 直前語クラス 0x10 なら 1
+      t = 0;
+      if (prev && F(prev, 0x0d) && pos1 && (cur.ab & 0x60) !== 0x40 && cl(prev) === 0x10) t = 1;
+      t42[i] = t; if (t !== 0) ref14 = cur.accent; continue;
+    }
+    // 0xc02f
+    if (F(cur, 0x0d)) { t42[i] = 0; continue; }
+    if ((cur.ab & 0x60) === 0x20) {
+      if (F(prev, 0x0c)) { t = prev.accent !== 0 ? 3 : 0; t42[i] = t; if (t !== 0) ref14 = cur.accent; continue; }
+    }
+    // 0xc080: 直前語の moraByte ビット5 と現語のそれ
+    if ((prev.mb & 0x20) && (cur.mb & 0x20)) { t42[i] = 0; continue; }
+    // 0xc095
+    if (F(cur, 9)) {
+      if (F(prev, 9) && (prev.mb & 0x20)) t = 0; else t = 1;
+      t42[i] = t; if (t !== 0) ref14 = cur.accent; continue;
+    }
+    // 0xc0d1
+    if (F(prev, 0x19) && (F(cur, 0x19) || F(cur, 4) || F(cur, 0x0c))) { t42[i] = 0; continue; }
+    // 0xc115
+    if (F(prev, 2)) {
+      let tt;
+      if (F(cur, 3)) tt = 0;
+      else if (!F(cur, 0x0c)) tt = 1;
+      else if (!nx) tt = 0;
+      else if ((nx.ab & 0x60) === 0x20) tt = 1;
+      else tt = 0;
+      t42[i] = tt; if (tt !== 0) ref14 = cur.accent; continue;
+    }
+    // 0xc156
+    if (F(prev, 0x15) && F(cur, 0x15) && !F(cur, 8)) { t42[i] = 0; continue; }
+    t42[i] = 1; ref14 = cur.accent;
+  }
+  // 補正パス (0xc1ad..0xc253)
+  for (let i = 2; i < n; i++) {
+    if (t42[i - 1] === 1 && fca70(nodes[i], 0x1d, pos1) && nodes[i - 1].mora <= 2) t42[i - 1] = 3;
+  }
+  return t42;
+}
+
+// ---------------------------------------------------------------------------
+// 語ノード列 → アクセント句の区切り位置 (公式の境界型分類器そのもの)
+//   返り値: 長さ n の真偽配列 (true = そのインデックスの直前で句を切る)
+//   公式の [node+0x44] マーカー = map(次ノードの型) なので「型 != 0 の語の直前で切る」。
+// ---------------------------------------------------------------------------
+export function phraseBreaks(nodes, pos1) {
+  const t42 = boundaryTypes(nodes, pos1);
+  const out = new Array(nodes.length).fill(false);
+  for (let i = 1; i < nodes.length; i++) out[i] = t42[i] !== 0;
+  return out;
 }
 
 // ---------------------------------------------------------------------------

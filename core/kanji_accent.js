@@ -3,7 +3,7 @@
 //   - accent: 插入アクセント記号 ' (下降核)
 //   - 无读音汉字的兜底: 绝不把裸汉字送进 AquesTalk (那会产生乱音/静音)
 import { chineseToKana, chineseToKanaAccent } from "./zh_kana.js";
-import { makeNode, phraseAccents } from "./accent_junction.js";
+import { makeNode, phraseAccents, phraseBreaks } from "./accent_junction.js";
 
 // 拗音/小写假名 (与前一拍同拍, 不新开 mora)
 export const SMALL_KANA = new Set("ャュョァィゥェォヮヶヵゎ");
@@ -267,16 +267,51 @@ function groupStream(stream, compoundJoin, compoundChain = true) {
   return groups;
 }
 
+// ===========================================================================
+// 公式アクセント句境界分類器 (RVA 0xbc00) による grouping — accentRule: 'junction'
+// ---------------------------------------------------------------------------
+// 公式 DLL の句分けは、語ノード列の各語に「境界型 [node+0x42]」を付ける事前パス
+// (eval/ACCENT_REPORT.md §4) だけで決まる。ここでは語列をそのまま分類器に渡し、
+// 「型 != 0 の語の直前で切る」だけを行う。記号 (非読み) は無条件に句を切る。
+// 実測: 公式 DLL 239 文の [node+0x42] と 238/238 一致 / 227 文の最終アクセント
+//       一致率 227/227 (DEV140 137→140, 保留87 86→87)。
+// ===========================================================================
+function groupStreamOfficial(stream, pos1, compoundJoin = true, compoundChain = true) {
+  const groups = [];
+  let i = 0;
+  while (i < stream.length) {
+    const it = stream[i];
+    if (it.kind !== 'seg') { groups.push(it); i++; continue; }
+    // 連続する語を 1 ランとしてまとめて分類する
+    let j = i;
+    while (j < stream.length && stream[j].kind === 'seg') j++;
+    const run = [];
+    for (let k = i; k < j; k++) run.push(stream[k]);
+    const nodes = run.map((s) => makeNode(s));
+    const breaks = phraseBreaks(nodes, pos1);
+    let cur = [];
+    for (let k = 0; k < run.length; k++) {
+      if (k > 0 && breaks[k]) { groups.push(cur); cur = []; }
+      cur.push(run[k]);
+    }
+    if (cur.length) groups.push(cur);
+    i = j;
+  }
+  return groups;
+}
+
 // デバッグ用: アクセント句のまとまりと核の位置を返す (実際の変換と同じ grouping を使う)
 export function debugPhrases(dict, text, opts = {}) {
-  const { compoundJoin = true, compoundChain = true } = opts;
+  const { compoundJoin = true, compoundChain = true, accentRule = 'junction', phraseGroup = 'official' } = opts;
   const raw = dict.toKanaDetailed(text);
   const stream = [];
   for (const s of raw) {
     if (!s.reading) { stream.push({ kind: 'text', out: s.surface }); continue; }
-    stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s) });
+    stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s), jcnt: s.jcnt ?? 0, junc: s.junc ?? null, moraByte: s.moraByte, accByte: s.accByte });
   }
-  const groups = groupStream(stream, compoundJoin, compoundChain);
+  const groups = (accentRule === 'junction' && dict.pos1 && phraseGroup !== 'heuristic')
+    ? groupStreamOfficial(stream, dict.pos1, compoundJoin, compoundChain)
+    : groupStream(stream, compoundJoin, compoundChain);
   return groups.map((g) => (Array.isArray(g)
     ? { phrase: g.map((m) => `${m.surface}[${m.reading}/a${m.accent}/m${m.mora}/p${m.pos}${m.aux ? '/aux' : ''}]`).join(' '), cut: phraseCut(g) }
     : { text: g.out }));
@@ -286,8 +321,8 @@ export function debugPhrases(dict, text, opts = {}) {
 //   accent      true = 带 ' 音高
 //   zhFallback  true = 无读音的汉字改用中文读音兜底 (尽力保留内容)
 //   dropped     既无日文读音、中文也读不出的字符 (已丢弃, 不进入引擎)
-export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe', accentModel = 'phrase', compoundJoin = true, accentRule = 'junction', compoundChain = true } = {}) {
-  if (accentModel === 'phrase') return convertJapanesePhrase(dict, text, { accent, zhFallback, compoundJoin, accentRule, compoundChain });
+export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe', accentModel = 'phrase', compoundJoin = true, accentRule = 'junction', compoundChain = true, phraseGroup = 'official' } = {}) {
+  if (accentModel === 'phrase') return convertJapanesePhrase(dict, text, { accent, zhFallback, compoundJoin, accentRule, compoundChain, phraseGroup });
   const segs = dict.toKanaDetailed(text);
   let out = "";
   const dropped = [];
@@ -345,7 +380,7 @@ function phraseCuts(members, reading, pos1) {
 }
 
 // アクセント句モデル本体。dict.toKanaDetailed の結果を句にまとめ、句ごとに核を 1 つだけ置く。
-export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = true, compoundJoin = true, accentRule = 'junction', compoundChain = true } = {}) {
+export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = true, compoundJoin = true, accentRule = 'junction', compoundChain = true, phraseGroup = 'official' } = {}) {
   const raw = dict.toKanaDetailed(text);
   const dropped = [];
   // 出力列を組み立てる: 'text' = そのまま出す (句を切る) / 'seg' = アクセント対象
@@ -362,11 +397,14 @@ export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = 
       else stream.push({ kind: 'text', out: s.surface });
       continue;
     }
-    stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s), jcnt: s.jcnt ?? 0, junc: s.junc ?? null });
+    stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s), jcnt: s.jcnt ?? 0, junc: s.junc ?? null, moraByte: s.moraByte, accByte: s.accByte });
   }
-  // 句にまとめる (debugPhrases と共有)
-  const groups = groupStream(stream, compoundJoin, compoundChain);
   const pos1 = accentRule === 'junction' ? dict.pos1 : null;
+  // 句にまとめる。既定 (phraseGroup:'official') は公式 DLL の境界型分類器 (RVA 0xbc00)
+  // をそのまま使う。phraseGroup:'heuristic' で旧来の経験則 grouping に戻せる。
+  const groups = (pos1 && phraseGroup !== 'heuristic')
+    ? groupStreamOfficial(stream, pos1, compoundJoin, compoundChain)
+    : groupStream(stream, compoundJoin, compoundChain);
   let out = '';
   for (const g of groups) {
     if (!Array.isArray(g)) { out += g.out; continue; }
