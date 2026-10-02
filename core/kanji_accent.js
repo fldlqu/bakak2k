@@ -101,7 +101,7 @@ export const AUX_SURF = new Set([
 export const AUX_NUCLEUS = new Map([
   ['ます', 1], ['ません', 2], ['まし', 1], ['ませ', 2], ['ましょ', 2],
   ['たい', 1], ['れる', 1], ['られる', 2], ['せる', 1], ['させる', 2],
-  ['られ', 2], ['させ', 2], ['れ', 1], ['せ', 1],
+  ['られ', 1], ['させ', 1], ['れ', 1], ['せ', 1],
   ['ながら', 1], ['そう', 1],
   ['やすい', 2], ['やすかっ', 2], ['やすく', 2], ['やすけれ', 2], ['にくい', 2], ['すぎ', 2],
   ['ぬ', 1], ['ず', 1], ['ん', 1], ['ちゃう', 1], ['てく', 1],
@@ -117,7 +117,7 @@ const NO_TAIL = new Set(['ない', 'ぬ', 'ん', 'なけれ', 'なかっ', 'な�
 // (v86 対拍: 行く+か → イク'カ / すれ+ば → スレ'バ / 遅れている+ので → オクレテイル'ノデ /
 //  散歩する+の → サンポスル'ノ / 会社+か → カイシャカ(名詞は尾高化しない) /
 //  おいしい+です → オイシ'イデス / おいしい+か → オイシ'イカ)
-const TAIL_PARTICLE = new Set(['か', 'ぞ', 'さ', 'な', 'わ', 'ぜ', 'ね', 'よ', 'の', 'ば', 'ので', 'のに', 'けど', 'けれど', 'です']);
+const TAIL_PARTICLE = new Set(['か', 'ぞ', 'さ', 'な', 'わ', 'ぜ', 'ね', 'よ', 'の', 'ば', 'ので', 'のに', 'けど', 'けれど', 'です', 'も']);
 // このうち ね/よ は直前が付属語のときだけ尾高化する (行く+ね は平板 / して+ね は シテ'ネ)
 const FIN_TE_ONLY = new Set(['ね', 'よ']);
 // イ形容詞 (終止形) の品詞ID。アクセント核は語幹最終拍 = 終止形の最終拍-1 に来る。
@@ -133,6 +133,15 @@ const isNoun = (m) => m.pos != null && NOUN_POS.has(m.pos);
 // 複合名詞 (名詞+名詞) を 1 アクセント句にまとめてよい品詞 (副詞・連体詞・ナ形容詞は除外)
 export const COMPOUND_NOUN_POS = new Set([...NOUN_POS].filter((p) => ![32770, 32771, 32772, 33949, 33761].includes(p)));
 const isCompoundNoun = (m) => m.pos != null && COMPOUND_NOUN_POS.has(m.pos);
+// 助詞 (付属語のうち格助詞・係助詞・終助詞・接続助詞)。助動詞と区別するために使う。
+// 動詞未然形につく「ない」は助動詞だが、助詞の後ろでは形容詞「無い」として自立する。
+// 公式: 行か+ない → イカナイ (同一句) / 時間+が+ない → ジカンガ|ナ'イ (別句) / 学生では+ない → ガクセーデ'ワ|ナ'イ
+export const PARTICLE_SURF = new Set([
+  'は', 'が', 'を', 'に', 'で', 'と', 'も', 'の', 'へ', 'や', 'から', 'まで', 'より', 'だけ',
+  'しか', 'など', 'ので', 'のに', 'けど', 'けれど', 'ば', 'たら', 'なら', 'ながら', 'ても', 'でも',
+  'か', 'ね', 'よ', 'な', 'わ', 'ぞ', 'ぜ', 'さ', 'って', 'こそ', 'さえ', 'ほど', 'ばかり', 'くらい',
+  'つつ', 'がら', 'て', 'り',
+]);
 // 付属語としての核は 0 だが、単独で句首に立つときは辞書の accent を使う助詞・助動詞。
 // (v86 対拍: 借り+た → カリタ / ここ+に+ない → ココニ|ナ'イ / 単独 た → タ')
 const AUX_ZERO_ACCENT = new Set(['た', 'だ', 'て', 'で', 'ば', 'ない', 'ぬ', 'ん', 'のに', 'ので', 'けど', 'けれど', 'ても', 'でも']);
@@ -165,6 +174,31 @@ function moraCut(reading, mora) {
     }
   }
   return -1;
+}
+
+// デバッグ用: アクセント句のまとまりと核の位置を返す
+export function debugPhrases(dict, text, opts = {}) {
+  const { compoundJoin = false } = opts;
+  const raw = dict.toKanaDetailed(text);
+  const stream = [];
+  for (const s of raw) {
+    if (!s.reading) { stream.push({ kind: 'text', out: s.surface }); continue; }
+    stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s) });
+  }
+  const groups = []; let cur = null;
+  for (const it of stream) {
+    if (it.kind === 'text') { if (cur) { groups.push(cur); cur = null; } continue; }
+    if (!cur) { cur = [it]; continue; }
+    const last = cur[cur.length - 1];
+    if (it.aux) { cur.push(it); continue; }
+    if (last.aux) { groups.push(cur); cur = [it]; continue; }
+    if (compoundJoin && isCompoundNoun(it) && isCompoundNoun(last)) { cur.push(it); continue; }
+    groups.push(cur); cur = [it];
+  }
+  if (cur) groups.push(cur);
+  return groups.map((g) => (Array.isArray(g)
+    ? { phrase: g.map((m) => `${m.surface}[${m.reading}/a${m.accent}/m${m.mora}/p${m.pos}${m.aux ? '/aux' : ''}]`).join(' '), cut: phraseCut(g) }
+    : { text: g.out }));
 }
 
 // 日文路径转换。返回 { kana, dropped }
@@ -235,7 +269,11 @@ export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = 
     if (it.kind === 'text') { if (cur) { groups.push(cur); cur = null; } groups.push(it); continue; }
     if (!cur) { cur = [it]; continue; }
     const last = cur[cur.length - 1];
-    if (it.aux) { cur.push(it); continue; }              // 付属語は前の句に付く
+    if (it.aux) {
+      // 「ない」系は助詞の後ろでは自立語 (形容詞「無い」) として新しい句を始める
+      if (NO_TAIL.has(it.surface) && last.aux && PARTICLE_SURF.has(last.surface)) { groups.push(cur); cur = [it]; continue; }
+      cur.push(it); continue;              // 付属語は前の句に付く
+    }
     if (last.aux) { groups.push(cur); cur = [it]; continue; }   // 自立語 → 新しい句
     if (compoundJoin && !it.aux && !last.aux && isCompoundNoun(it) && isCompoundNoun(last)) { cur.push(it); continue; } // 複合名詞
     groups.push(cur); cur = [it];
@@ -283,6 +321,11 @@ function phraseCut(members) {
     // 尾高名詞 + の → 平板化
     if (HM >= 2 && H === HM && members[1] && members[1].surface === 'の') return -1;
     target = { j: 0, m: H };
+  }
+  // (4b) 平板イ形容詞は助詞・助動詞が付くと語幹最終拍に核 (公式: おいしい+と → オイシ'イト /
+  //      おいしい+が → オイシ'イガ / 重い+を → オモ'イオ)。単独なら平板のまま。
+  if (!target && H === 0 && members.length >= 2 && isAdj(head)) {
+    target = { j: 0, m: Math.max(1, HM - 1) };
   }
   // (5) 平板头 + 接続/終助詞 → 直前の用言の最終拍に核 (尾高化)
   //     ね/よ は直前が付属語のときだけ (行く+ね は平板 / ここ+で+ね は ココデ'ネ)。
