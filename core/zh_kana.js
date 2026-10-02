@@ -94,17 +94,31 @@ export function chineseToKana(text) {
 }
 
 // ---------- 带音高: 中文声调 → AquesTalk アクセント記号 (') ----------
-// AquesTalk 只认 ' = 下降核 (在假名后音高下降); 中文声调近似映射:
-//   4声(去声, 高降 51) → 音节后加 '  (最匹配: 高起后降)
-//   1声(阴平 55) / 2声(阳平 35) / 3声(上声 214) / 轻声 → 不加
-// 注: 日文記号只有"下降", 无法表达升调/降升, 故为近似 (4声位置最明显)
+// AquesTalk 只认 ' = 下降核: ' 跟在某 mora 后 ⇒ 该 mora 之后音高下降 (日文アクセント記法)。
+// 中文声调近似映射:
+//   4声(去声, 高降 51) → 该音节后加 '   (构成"高→降"边界)
+//   1声(阴平55)/2声(阳平35)/3声(上声214)/轻声 → 不加 (日文記号无"上升", 无法表达)
+//   末尾音节: 保证其为低音 (中文陈述句降调); 若前面已有 ' 则自然满足, 否则在末尾音节的
+//             最后一个 mora 前插 '  (例: 你好 → ニハ'オ, 东京 → ドンジ'ン)
+// 注: 这是近似 —— 中文是音节内音高曲线, 日文記号只能表达音节间的"降"。
+const MORAE_SMALL = new Set("ャュョァィゥェォヮヶヵゎ");
+// 末尾 mora 的起始字符下标 (拗音小字并入前一 mora)
+function lastMoraStart(kana) {
+  let idx = 0;
+  for (let i = 0; i < kana.length; i++) {
+    if (!MORAE_SMALL.has(kana[i])) idx = i;
+  }
+  return idx;
+}
+
 export function chineseToKanaAccent(text) {
   if (!text) return "";
   const tokens = pinyin(text, { toneType: "num", type: "array", nonZh: "consecutive" });
-  const out = [];
+  // 先把每个可转音节记录为 {kana, tone}; 非音节(标点/英文)原样
+  const parts = [];
   for (const tok of tokens) {
     const m = /^([a-zü:v]+)([1-5])?$/i.exec(tok);
-    if (!m) { out.push(tok); continue; }
+    if (!m) { parts.push({ raw: tok }); continue; }
     const base = m[1], tone = m[2];
     const norm = base.toLowerCase().replace(/v/g, "u:").replace(/ü/g, "u:");
     let kana;
@@ -114,7 +128,28 @@ export function chineseToKanaAccent(text) {
     } else {
       kana = P2K[norm] ?? tok;
     }
-    out.push(tone === "4" ? kana + "'" : kana);
+    parts.push({ kana, tone });
+  }
+
+  // 4声 → 音节后加 '(末尾音节留到最后统一处理, 避免末尾高音)
+  const words = parts.filter((p) => p.kana !== undefined);
+  const lastWord = words[words.length - 1];
+  const out = [];
+  let lastWordIdx = -1;
+  for (const p of parts) {
+    if (p.raw !== undefined) { out.push(p.raw); continue; }
+    if (p === lastWord) { lastWordIdx = out.length; out.push(p.kana); continue; }  // 末尾音节: 稍后保证低音
+    out.push(p.tone === "4" ? p.kana + "'" : p.kana);
+  }
+
+  // 末尾音节降调 (中文陈述句): 若它前面没有 ' , 在它的最后一个 mora 前插 '
+  if (lastWordIdx >= 0) {
+    const before = lastWordIdx > 0 ? out[lastWordIdx - 1] : "";
+    if (!before.endsWith("'")) {
+      const kana = out[lastWordIdx];
+      const at = lastMoraStart(kana);
+      out[lastWordIdx] = kana.slice(0, at) + "'" + kana.slice(at);
+    }
   }
   return out.join("");
 }
