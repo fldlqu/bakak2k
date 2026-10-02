@@ -14,7 +14,8 @@ export const SMALL_KANA = new Set("ャュョァィゥェォヮヶヵゎ");
 //   accent == mora → 尾高: ' 放在词尾 (官方: 川→カワ', 山→ヤマ', 花→ハナ', 犬→イヌ')
 //   accent == 0 / > mora (平板・助词) → 不加
 export function accentPos(reading, accent, mora) {
-  if (accent >= 1 && accent === mora) return reading.length;   // 尾高 → 词尾
+  // 尾高 → 词尾; 但 mora==1 的頭高不加 (官方: した→シタ, 川(2拍)→カワ')
+  if (accent >= 1 && accent === mora && mora >= 2) return reading.length;
   if (!(accent >= 1 && accent < mora)) return -1;
   let m = 0;
   for (let i = 0; i < reading.length; i++) {
@@ -32,6 +33,24 @@ export function accentPos(reading, accent, mora) {
 
 const HAN_RE = /[\u4e00-\u9fff]/;
 
+// ---------- 助词前插 ' ----------
+// 官方 AqKanji2Koe 在句末助词前插 ' (平板句的下降落在助词上), 实测 (汉字输入对拍):
+//   して+ね → シテ'ネ    いって+ね → イッテ'ネ   やって+ね → ヤッテ'ネ   ね+ね → ネ'ネ
+//   たべて+ね → タ'ベテネ (不插)   みて+ね → ミ'テネ(不插)   しんぶん+ね → シンブンネ(不插)
+// 判定 (不依赖词边界, 全部用例自洽):
+//   当前段是句末助词, 且前一段 acc==0 且 mora<=2, 且再前一段没有真アクセント
+const FINAL_PARTICLES = new Set(["ネ", "ヨ", "カ", "ナ", "ワ", "ゾ", "ゼ", "サ"]);
+const isRealAccent = (s) => !!s && s.accent >= 1 && s.accent <= s.mora;
+function insertBeforeParticle(segs, i) {
+  if (i === 0) return false;
+  const cur = segs[i], prev = segs[i - 1];
+  if (!cur || !cur.reading || !FINAL_PARTICLES.has(cur.reading)) return false;
+  if (!prev || !prev.reading) return false;
+  if (prev.accent !== 0 || prev.mora > 2) return false;
+  const before = i >= 2 ? segs[i - 2] : null;
+  return !isRealAccent(before);
+}
+
 // 日文路径转换。返回 { kana, dropped }
 //   accent      true = 带 ' 音高
 //   zhFallback  true = 无读音的汉字改用中文读音兜底 (尽力保留内容)
@@ -40,7 +59,8 @@ export function convertJapanese(dict, text, { accent = true, zhFallback = true }
   const segs = dict.toKanaDetailed(text);
   let out = "";
   const dropped = [];
-  for (const s of segs) {
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
     if (!s.reading) {
       const isHan = HAN_RE.test(s.surface);
       if (isHan && zhFallback) {
@@ -52,6 +72,8 @@ export function convertJapanese(dict, text, { accent = true, zhFallback = true }
       out += s.surface;                                          // 标点/英文等原样保留
       continue;
     }
+    // 助词前的下降 (官方行为)
+    if (accent && insertBeforeParticle(segs, i)) out += "'";
     const r = s.reading;
     if (accent) {
       const pos = accentPos(r, s.accent, s.mora);
