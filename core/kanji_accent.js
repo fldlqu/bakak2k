@@ -6,6 +6,8 @@ import { chineseToKana, chineseToKanaAccent } from "./zh_kana.js";
 
 // 拗音/小写假名 (与前一拍同拍, 不新开 mora)
 export const SMALL_KANA = new Set("ャュョァィゥェォヮヶヵゎ");
+// オ段かな (助動詞「う」が長音「ー」になる環境)
+const O_DAN = new Set("オコソトノホモヨロゴゾドボポヴョ");
 
 // 返回 ' 的插入位置 (字符索引); -1 = 不加
 // 规则 (v86 跑官方 AqKanji2Koe.dll 实证, 汉字输入):
@@ -112,10 +114,15 @@ export const AUX_HEAD_ONLY = new Set([
 const NO_TAIL = new Set(['ない', 'ぬ', 'ん', 'なけれ', 'なかっ', 'なく', 'なかろ']);
 // 平板の用言 + これらの助詞 → 直前の用言の最終拍に核 (尾高化)。
 // (v86 対拍: 行く+か → イク'カ / すれ+ば → スレ'バ / 遅れている+ので → オクレテイル'ノデ /
-//  散歩する+の → サンポスル'ノ / 会社+か → カイシャカ(名詞は尾高化しない))
-const TAIL_PARTICLE = new Set(['か', 'ぞ', 'さ', 'な', 'わ', 'ぜ', 'ね', 'よ', 'の', 'ば', 'ので', 'のに', 'けど', 'けれど']);
+//  散歩する+の → サンポスル'ノ / 会社+か → カイシャカ(名詞は尾高化しない) /
+//  おいしい+です → オイシ'イデス / おいしい+か → オイシ'イカ)
+const TAIL_PARTICLE = new Set(['か', 'ぞ', 'さ', 'な', 'わ', 'ぜ', 'ね', 'よ', 'の', 'ば', 'ので', 'のに', 'けど', 'けれど', 'です']);
 // このうち ね/よ は直前が付属語のときだけ尾高化する (行く+ね は平板 / して+ね は シテ'ネ)
 const FIN_TE_ONLY = new Set(['ね', 'よ']);
+// イ形容詞 (終止形) の品詞ID。アクセント核は語幹最終拍 = 終止形の最終拍-1 に来る。
+// (v86 対拍: おいしい(a0)+です → オイシ'イデス / 重い(a0)+か → オモ'イカ)
+export const ADJ_POS = new Set([33856, 33876, 1028, 1088]);
+const isAdj = (m) => m.pos != null && ADJ_POS.has(m.pos);
 // 名詞の品詞ID (終助詞の尾高化は名詞には起きない)
 export const NOUN_POS = new Set([
   981, 33749, 33747, 33752, 33758, 33761, 984, 980, 993, 1171, 1004, 1005, 1006, 1007,
@@ -125,7 +132,9 @@ const isNoun = (m) => m.pos != null && NOUN_POS.has(m.pos);
 // 付属語としての核は 0 だが、単独で句首に立つときは辞書の accent を使う助詞・助動詞。
 // (v86 対拍: 借り+た → カリタ / ここ+に+ない → ココニ|ナ'イ / 単独 た → タ')
 const AUX_ZERO_ACCENT = new Set(['た', 'だ', 'て', 'で', 'ば', 'ない', 'ぬ', 'ん', 'のに', 'ので', 'けど', 'けれど', 'ても', 'でも']);
-const auxAccent = (m) => (AUX_ZERO_ACCENT.has(m.surface) ? 0 : m.accent | 0);
+// 辞書の accent 値ではなく実測値を使う付属語 (でしょ は +2: 学生でしょう → ガクセーデ'ショー)
+const AUX_ACCENT_FIX = new Map([['でしょ', 2]]);
+const auxAccent = (m) => (AUX_ZERO_ACCENT.has(m.surface) ? 0 : (AUX_ACCENT_FIX.get(m.surface) ?? (m.accent | 0)));
 // 複合語 (自立語+自立語) の結合: 後部要素が3拍以上なら接合部に核
 const COMPOUND_MIN_MORA = 3;
 
@@ -231,7 +240,11 @@ export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = 
   let out = '';
   for (const g of groups) {
     if (!Array.isArray(g)) { out += g.out; continue; }
-    const reading = g.map((m) => m.reading).join('');
+    // 助動詞「う」はオ段の直後では長音「ー」として出す (公式: 書こ+う → カコ'ー, でしょ+う → デ'ショー)
+    let reading = '';
+    for (const m of g) {
+      reading += (m.aux && m.surface === 'う' && reading && O_DAN.has(reading[reading.length - 1])) ? 'ー' : m.reading;
+    }
     if (!accent) { out += reading; continue; }
     const cut = phraseCut(g);
     out += cut >= 0 ? reading.slice(0, cut) + "'" + reading.slice(cut) : reading;
@@ -277,7 +290,8 @@ function phraseCut(members) {
       const P = members[j - 1];
       const teOnly = FIN_TE_ONLY.has(members[j].surface);
       if (P.aux ? true : (!teOnly && !isNoun(P))) {
-        target = { j: j - 1, m: P.mora | 0 };
+        // イ形容詞は語幹最終拍 (= 終止形の最終拍-1) に核
+        target = { j: j - 1, m: isAdj(P) ? Math.max(1, (P.mora | 0) - 1) : (P.mora | 0) };
       }
       break;
     }
