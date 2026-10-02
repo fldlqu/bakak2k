@@ -55,10 +55,11 @@ function insertBeforeParticle(segs, i) {
 //   accent      true = 带 ' 音高
 //   zhFallback  true = 无读音的汉字改用中文读音兜底 (尽力保留内容)
 //   dropped     既无日文读音、中文也读不出的字符 (已丢弃, 不进入引擎)
-export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true } = {}) {
+export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe' } = {}) {
   const segs = dict.toKanaDetailed(text);
   let out = "";
   const dropped = [];
+  let prevEmitted = false;      // 直前のキーが ' を出したか (accentPolicy='dedupe' 用)
   for (let i = 0; i < segs.length; i++) {
     const s = segs[i];
     if (!s.reading) {
@@ -70,14 +71,19 @@ export function convertJapanese(dict, text, { accent = true, zhFallback = true, 
       }
       if (isHan) { dropped.push(s.surface); continue; }           // 丢弃, 避免裸汉字进引擎
       out += s.surface;                                          // 标点/英文等原样保留
+      prevEmitted = false;
       continue;
     }
+    // アクセント句内で下降は原則 1 つ: 直前のキーが既に ' を出したなら抑制 (accentPolicy)
+    let suppress = false;
+    if (accent && accentPolicy === 'dedupe' && prevEmitted) suppress = true;
     // 助词前的下降 (官方行为)
     if (accent && particleAccent && insertBeforeParticle(segs, i)) out += "'";
     const r = s.reading;
     if (accent) {
-      const pos = accentPos(r, s.accent, s.mora);
+      const pos = suppress ? -1 : accentPos(r, s.accent, s.mora);
       out += pos >= 0 ? r.slice(0, pos) + "'" + r.slice(pos) : r;
+      prevEmitted = pos >= 0;
     } else {
       out += r;
     }
