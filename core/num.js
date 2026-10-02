@@ -95,7 +95,14 @@ function readNumberPart(t) {
     const frac = clean.slice(dot + 1);
     let out = int === '' ? 'ゼロ' : (hasComma || int.length <= 4 && !/^0/.test(int) ? kanaInt(int) : readDigits(int));
     out += 'テン';
-    for (const c of frac) out += DG[Number.parseInt(c, 10)];
+    // 小数部は数字だけとは限らない (1.2.3 のような版番号は複数の '.' を含む)。
+    // 数字以外を無条件に DG[] へ渡すと DG[NaN] === undefined が文字列に混入するため,
+    // '.' は テン として読み, それ以外の非数字は読み飛ばす。
+    for (const c of frac) {
+      if (c === '.') { out += 'テン'; continue; }
+      const d = DG[Number.parseInt(c, 10)];
+      if (d !== undefined) out += d;
+    }
     return out;
   }
   if (hasComma) return kanaInt(clean);

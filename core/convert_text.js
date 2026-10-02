@@ -9,6 +9,40 @@ const HAN_RE = /[\u4e00-\u9fff]/;
 // 判定无意义, 标为 neutral (不着色)
 const CONTENT_RE = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ffA-Za-z0-9]/;
 
+// ---------- 标点归一化 ----------
+// AquesTalk 只把 、 。 ？ 与半角 , 当作停顿記号 (实测停顿: 、≈353ms, 。/？≈603ms, ,≈186ms);
+// 中文常用的 ，！ 以及 . ! ? 会被直接忽略 → 停顿消失。这里统一映射为 AquesTalk 认得的記号。
+const PUNCT_MAP = new Map([
+  ["，", "、"],   // 全角逗号 → 顿号
+  ["；", "、"],   // 全角分号
+  [";", "、"],
+  ["：", "、"],   // 全角冒号
+  ["！", "。"],   // 感叹 → 句末长停顿
+  ["!", "。"],
+  ["？", "？"],   // 保留 (AquesTalk 原生)
+  ["?", "？"],
+  ["。", "。"],   // 保留 (AquesTalk 原生)
+  ["…", "。"],
+  ["‥", "。"],
+]);
+
+// `.` → `。`, 但避开小数/版本号 (两侧都是数字时不动)
+export function normalizePunctuation(s) {
+  if (!s) return s;
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === ".") {
+      const prev = s[i - 1], next = s[i + 1];
+      if (!(prev >= "0" && prev <= "9" && next >= "0" && next <= "9")) { out += "。"; continue; }
+      out += ch;
+      continue;
+    }
+    out += PUNCT_MAP.get(ch) ?? ch;
+  }
+  return out;
+}
+
 // 自动判别该段是中文还是日文:
 //   含平假名/片假名 → 日文 (日文句子必有假名)
 //   纯汉字: 日文词典查不到读音的汉字占比 >= 0.3 → 中文
@@ -38,7 +72,7 @@ export function convertSegments(dict, text, { flat = false, forceLang = null } =
     if (!seg.text) continue;
     // 纯标点/符号段: 两条路径结果相同, 不判定语言
     if (!CONTENT_RE.test(seg.text)) {
-      parts.push({ text: seg.text, lang: null, zh: null, source: "none", kana: seg.text });
+      parts.push({ text: seg.text, lang: null, zh: null, source: "none", kana: normalizePunctuation(seg.text) });
       continue;
     }
     let source, zh;
@@ -53,7 +87,8 @@ export function convertSegments(dict, text, { flat = false, forceLang = null } =
       kana = r.kana;
       dropped.push(...r.dropped);
     }
-    parts.push({ text: seg.text, lang: seg.lang, zh, source, kana });
+    // 标点归一化 (中文 ，！ 等 → AquesTalk 认得的停顿記号)
+    parts.push({ text: seg.text, lang: seg.lang, zh, source, kana: normalizePunctuation(kana) });
   }
   return { parts, kana: parts.map((p) => p.kana).join(""), dropped, tags };
 }
