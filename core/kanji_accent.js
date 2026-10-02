@@ -3,6 +3,7 @@
 //   - accent: 插入アクセント記号 ' (下降核)
 //   - 无读音汉字的兜底: 绝不把裸汉字送进 AquesTalk (那会产生乱音/静音)
 import { chineseToKana, chineseToKanaAccent } from "./zh_kana.js";
+import { makeNode, phraseAccents } from "./accent_junction.js";
 
 // 拗音/小写假名 (与前一拍同拍, 不新开 mora)
 export const SMALL_KANA = new Set("ャュョァィゥェォヮヶヵゎ");
@@ -285,8 +286,8 @@ export function debugPhrases(dict, text, opts = {}) {
 //   accent      true = 带 ' 音高
 //   zhFallback  true = 无读音的汉字改用中文读音兜底 (尽力保留内容)
 //   dropped     既无日文读音、中文也读不出的字符 (已丢弃, 不进入引擎)
-export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe', accentModel = 'phrase', compoundJoin = true } = {}) {
-  if (accentModel === 'phrase') return convertJapanesePhrase(dict, text, { accent, zhFallback, compoundJoin });
+export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe', accentModel = 'phrase', compoundJoin = true, accentRule = 'junction' } = {}) {
+  if (accentModel === 'phrase') return convertJapanesePhrase(dict, text, { accent, zhFallback, compoundJoin, accentRule });
   const segs = dict.toKanaDetailed(text);
   let out = "";
   const dropped = [];
@@ -322,8 +323,29 @@ export function convertJapanese(dict, text, { accent = true, zhFallback = true, 
   return { kana: out.replace(/[ \u3000]/g, ""), dropped };
 }
 
+// ===========================================================================
+// 公式アクセント結合アルゴリズム (accent_junction.js) を句に適用する。
+// 返り値: reading 中で ' を挿入する文字インデックスの配列 (核が無ければ空)
+// ===========================================================================
+function phraseCuts(members, reading, pos1) {
+  const nodes = members.map(makeNode);
+  const phrases = phraseAccents(nodes, pos1);
+  const cuts = [];
+  let base = 0;                                   // 句頭の拍オフセット (reading 先頭から)
+  for (const p of phrases) {
+    if (p.accent > 0) {
+      const idx = moraCut(reading, base + p.accent);
+      if (idx >= 0) cuts.push(idx);
+    }
+    let m = 0;
+    for (let k = p.start; k < p.end; k++) m += members[k].mora | 0;
+    base += m;
+  }
+  return [...new Set(cuts)].sort((a, b) => a - b);
+}
+
 // アクセント句モデル本体。dict.toKanaDetailed の結果を句にまとめ、句ごとに核を 1 つだけ置く。
-export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = true, compoundJoin = true } = {}) {
+export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = true, compoundJoin = true, accentRule = 'junction' } = {}) {
   const raw = dict.toKanaDetailed(text);
   const dropped = [];
   // 出力列を組み立てる: 'text' = そのまま出す (句を切る) / 'seg' = アクセント対象
@@ -340,10 +362,11 @@ export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = 
       else stream.push({ kind: 'text', out: s.surface });
       continue;
     }
-    stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s) });
+    stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s), jcnt: s.jcnt ?? 0, junc: s.junc ?? null });
   }
   // 句にまとめる (debugPhrases と共有)
   const groups = groupStream(stream, compoundJoin);
+  const pos1 = accentRule === 'junction' ? dict.pos1 : null;
   let out = '';
   for (const g of groups) {
     if (!Array.isArray(g)) { out += g.out; continue; }
@@ -353,6 +376,15 @@ export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = 
       reading += (m.aux && m.surface === 'う' && reading && O_DAN.has(reading[reading.length - 1])) ? 'ー' : m.reading;
     }
     if (!accent) { out += reading; continue; }
+    if (pos1) {
+      // 公式 DLL のアクセント結合アルゴリズム (完全移植)
+      const cuts = phraseCuts(g, reading, pos1);
+      if (cuts.length === 0) { out += reading; continue; }
+      let res = '', prev = 0;
+      for (const c of cuts) { res += reading.slice(prev, c) + "'"; prev = c; }
+      out += res + reading.slice(prev);
+      continue;
+    }
     const cut = phraseCut(g);
     out += cut >= 0 ? reading.slice(0, cut) + "'" + reading.slice(cut) : reading;
   }

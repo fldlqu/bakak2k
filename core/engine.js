@@ -46,6 +46,38 @@ function parseConnMatrix(bytes, u32) {
   return { w, h, m };
 }
 
+// ---------------------------------------------------------------------------
+// POS1 セクション = アクセント結合の「品詞クラス表」
+// ---------------------------------------------------------------------------
+// v86 上で公式 DLL の命令 (RVA 0x37d2 `movzx ecx,byte [edx+eax+0x1a]`) を実行させた結果、
+//   ecx = 公式の辞書オブジェクト, [ecx] = aqdic.bin + 0x1ac ("POS1" タグの位置)
+//   [ [ecx] + 0x18 ] = u16 クラス数 (=1182, pos&0x7fff の総数と一致)
+//   [ [ecx] + 0x1a ] = u8  クラス表 (1182 バイト, 0x1c6..0x664 で MCGD の直前で終わる)
+//   [ [ecx] + 0x08 ] = u16 ペア×4 = (116,189) (51,76) (22,50) (5,10)
+// クラス値は pos&0x7fff を索引として引かれ、アクセント結合規則の選択に使われる。
+const POSD_TAG_OFFSET = 0x1a4;
+function parsePos1(bytes) {
+  const u16 = (o) => bytes[o] | (bytes[o + 1] << 8);
+  let base = POSD_TAG_OFFSET + 8;
+  const okTag = (o) => bytes[o] === 0x50 && bytes[o + 1] === 0x4f && bytes[o + 2] === 0x53 && bytes[o + 3] === 0x44;
+  if (!okTag(POSD_TAG_OFFSET)) {
+    base = -1;
+    for (let o = 0x40; o + 0x1c < bytes.length; o++) {
+      if (okTag(o)) {
+        const size = bytes[o + 4] | (bytes[o + 5] << 8) | (bytes[o + 6] << 16) | (bytes[o + 7] << 24);
+        if (size > 0x100 && size <= 0x1000000) { base = o + 8; break; }
+      }
+    }
+    if (base < 0) return null;
+  }
+  const count = u16(base + 0x18);
+  if (count < 16 || base + 0x1a + count > bytes.length) return null;
+  const table = bytes.subarray(base + 0x1a, base + 0x1a + count);
+  const ranges = [];
+  for (let i = 0; i < 4; i++) ranges.push([u16(base + 0x8 + i * 4), u16(base + 0xa + i * 4)]);
+  return { count, table, ranges, off: base };
+}
+
 // 連接コスト近似用: 名詞を表す品詞ID (_connCost 参照)
 const NOUN_POS = new Set([
   981, 33749, 33747, 33752, 33758, 33761, 984, 980, 993, 1171, 1004, 1005, 1006, 1007,
@@ -101,7 +133,22 @@ function decodeRecords(bytes, tokOff, tokSize, rel, rel2) {
     } else {
       for (let j = 0; j < mora; j++) text += CODE2KANA[bytes[p + 7 + j]] ?? '';
     }
-    if (text) recs.push({ text, accent, mora, cost, pos });
+    // アクセント結合データ (「extra バイト」) の位置。公式 DLL の record ローダ
+    // (RVA 0xd265..0xd2c8) を逆アセンブルして確定:
+    //   結合バイト数 = flag & 3
+    //   結合バイト位置 = p + 7 + mora + ((flag & 4) ? 3 : 0)
+    //   cls = (byte >> 5) - 2,  val = (byte & 0x1f) + (cls !== 0 ? 20 : 0)
+    // flag 0x44/0x45 (isE7) は 3 バイトの別フィールドを挟む長形式。
+    const jcnt = flag & 3;
+    if (text) {
+      const joff = p + 7 + mora + ((flag & 4) ? 3 : 0);
+      let junc = null;
+      if (jcnt > 0 && joff + jcnt <= bytes.length) {
+        junc = new Array(jcnt);
+        for (let j = 0; j < jcnt; j++) junc[j] = bytes[joff + j];
+      }
+      recs.push({ text, accent, mora, cost, pos, flag, jcnt, junc });
+    }
     p += len;
   }
   return recs;
@@ -181,6 +228,8 @@ export class AqK2KDict {
     const cm = this.connCost === 'matrix' ? parseConnMatrix(this.bytes, u32) : null;
     this.connMatrix = cm ? cm.m : null;
     this.connW = cm ? cm.w : 0;
+    // アクセント結合の品詞クラス表 (公式 POS1 セクション)。無い辞書では null。
+    this.pos1 = parsePos1(this.bytes);
     this.trie = trie;
     this.u32 = u32;
     this.mapOff = mapOff;
@@ -382,6 +431,8 @@ export class AqK2KDict {
   }
 
   // Whole-sentence converter with per-segment detail (surface/reading/accent).
+  // 追加フィールド (既存 API は不変): pos (品詞), cost, flag, jcnt, junc
+  //   junc = アクセント結合バイト (公式 POS1 クラス表と組み合わせて核位置を決める)
   toKanaDetailed(text) {
     return this.segment(text).map((t) => ({
       surface: t.surface,
@@ -390,6 +441,9 @@ export class AqK2KDict {
       mora: t.reading?.mora ?? null,
       pos: t.reading?.pos ?? null,
       cost: t.reading?.cost ?? null,
+      flag: t.reading?.flag ?? null,
+      jcnt: t.reading?.jcnt ?? 0,
+      junc: t.reading?.junc ?? null,
     }));
   }
 
