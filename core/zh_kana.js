@@ -117,7 +117,8 @@ export function chineseToKanaAccent(text) {
   // 先把每个可转音节记录为 {kana, tone}; 非音节(标点/英文)原样
   const parts = [];
   for (const tok of tokens) {
-    const m = /^([a-zü:v]+)([1-5])?$/i.exec(tok);
+    // 声调数字: pinyin-pro 用 0 表示轻声(如 的→de0), 必须接受 0, 否则会原样泄漏到输出
+    const m = /^([a-zü:v]+)([0-5])?$/i.exec(tok);
     if (!m) { parts.push({ raw: tok }); continue; }
     const base = m[1], tone = m[2];
     const norm = base.toLowerCase().replace(/v/g, "u:").replace(/ü/g, "u:");
