@@ -224,8 +224,14 @@ export class AqK2KDict {
         const cand = text.slice(i, i + L);
         const e = this.bySurface.get(cand);
         if (!e || !e.length) continue;
-        const rec = this._pick(e[0].records);
-        relax(i + L, base + (rec ? rec.cost : 0) + this._connCost(best[i].node, cand, rec), i, { surface: cand, reading: rec, id: e[0].id });
+        // 全レコードを連接コスト込みで評価する (文脈によって読みが変わるため。
+        // 例: 十時 → ジ, 誕生日 → ビ, 外国語 → ゴ は cost 最小レコードではない)
+        let bestRec = null, bestCost = Infinity;
+        for (const r of e[0].records) {
+          const c = (r.cost ?? 0) + this._connCost(best[i].node, cand, r);
+          if (c < bestCost) { bestCost = c; bestRec = r; }
+        }
+        relax(i + L, base + bestCost, i, { surface: cand, reading: bestRec, id: e[0].id });
       }
       // 英文串 / 数字串 / 单字符回退
       if (/[A-Za-z]/.test(text[i])) {
