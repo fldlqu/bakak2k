@@ -17,8 +17,7 @@ export function getK2KDict(): ReturnType<typeof createDict> {
 }
 
 // 汉字/平假名 → 读音片假名 (AquesTalk 可合成); 无汉字时原样返回
-export function kanjiToKana(text: string): string {
-  return getK2KDict().toKana(text);
+export function kanjiToKana(text: string): string {  return getK2KDict().toKana(text);
 }
 
 // 带アクセント記号 (' = 下降核) 的转换; 规则与 webui/src/synth/k2k.ts 一致
@@ -52,4 +51,23 @@ export function kanjiToKanaAccent(text: string): string {
     else out += s.reading;
   }
   return out.replace(/[ \u3000]/g, "");
+}
+
+// ---------- 中文 (拼音 → 近似中文发音的片假名) ----------
+export { chineseToKana } from "./core/zh_kana.js";
+
+// 判断文本是否更像中文:
+//   含平假名/片假名 → 日文; 纯汉字: 日文词典查不到读音的汉字占比 >= 0.3 → 中文
+export function looksChinese(text: string): boolean {
+  if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) return false;   // 假名 → 日文
+  if (!/[\u4e00-\u9fff]/.test(text)) return false;
+  const segs = getK2KDict().segment(text);
+  let han = 0, unresolved = 0;
+  for (const s of segs) {
+    if (/[\u4e00-\u9fff]/.test(s.surface)) {
+      han++;
+      if (!s.reading) unresolved++;
+    }
+  }
+  return han > 0 && unresolved / han >= 0.3;
 }
