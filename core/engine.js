@@ -126,8 +126,8 @@ export class AqK2KDict {
     this.bytes = uint8 instanceof Uint8Array ? uint8 : new Uint8Array(uint8);
     // 读音选择模式: 'cost' (默认, 按词条成本最小, 贴近官方 AqKanji2Koe) | 'first' (旧行为: 取首条)
     this.readingMode = opts.readingMode === 'first' ? 'first' : 'cost';
-    // 分词模式: 'greedy' (默认, 最长匹配) | 'viterbi' (词条 cost 求和最小)
-    this.segmentMode = opts.segmentMode === 'viterbi' ? 'viterbi' : 'greedy';
+    // 分词模式: 'viterbi' (默认, 词条 cost 求和最小; 官方形态分析的近似) | 'greedy' (最长匹配)
+    this.segmentMode = opts.segmentMode === 'greedy' ? 'greedy' : 'viterbi';
     const { trie, u32, mapOff, tokOff, tokSize } = parseSections(this.bytes);
     this.trie = trie;
     this.u32 = u32;
