@@ -125,6 +125,15 @@ const FIN_TE_ONLY = new Set(['ね', 'よ']);
 // (v86 対拍: おいしい(a0)+です → オイシ'イデス / おいしかっ → オイシ'カッタ / 若く → ワカ'ク)
 export const ADJ_POS = new Set([33856, 33876, 1028, 1088, 1089, 33866, 33881, 1100, 33868]);
 const isAdj = (m) => m.pos != null && ADJ_POS.has(m.pos);
+// 終止形らしい語尾か (伝聞「そう」の切れ目判定用)。
+// 五段/サ変/カ変の終止形はウ段、イ形容詞の終止形は「イ」。連用形 (イ段/エ段/ク/語幹) は該当しない。
+// ただし助動詞 だ・た はア段でも終止形。
+function isTerminalForm(m) {
+  const r = m.reading ?? '';
+  if (!r) return false;
+  if (m.surface === 'だ' || m.surface === 'た' || m.surface === 'です' || m.surface === 'でし') return true;
+  return /[ウクグスズツヅヌフブプムユル]$/.test(r);
+}
 function adjNucleus(m) {
   const r = m.reading ?? '', mm = m.mora | 0;
   if (/カッ$/.test(r)) return Math.max(1, mm - 2);
@@ -274,13 +283,19 @@ export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = 
   // 句にまとめる
   const groups = [];
   let cur = null;
-  for (const it of stream) {
+  for (let si = 0; si < stream.length; si++) {
+    const it = stream[si];
     if (it.kind === 'text') { if (cur) { groups.push(cur); cur = null; } groups.push(it); continue; }
     if (!cur) { cur = [it]; continue; }
     const last = cur[cur.length - 1];
     if (it.aux) {
       // 「ない」系は助詞の後ろでは自立語 (形容詞「無い」) として新しい句を始める
       if (NO_TAIL.has(it.surface) && last.aux && PARTICLE_SURF.has(last.surface)) { groups.push(cur); cur = [it]; continue; }
+      // 伝聞「そうです」は終止形のあとで別のアクセント句になる
+      // (公式: 行く+そうです → イク|ソ'ーデス / 降り+そうです → オリソ'ーデス)
+      const nx = stream[si + 1];
+      if (it.surface === 'そう' && nx && nx.kind === 'seg' && (nx.surface === 'です' || nx.surface === 'でし')
+          && isTerminalForm(last)) { groups.push(cur); cur = [it]; continue; }
       cur.push(it); continue;              // 付属語は前の句に付く
     }
     if (last.aux) { groups.push(cur); cur = [it]; continue; }   // 自立語 → 新しい句
