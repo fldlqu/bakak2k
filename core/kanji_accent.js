@@ -55,7 +55,7 @@ function insertBeforeParticle(segs, i) {
 //   accent      true = 带 ' 音高
 //   zhFallback  true = 无读音的汉字改用中文读音兜底 (尽力保留内容)
 //   dropped     既无日文读音、中文也读不出的字符 (已丢弃, 不进入引擎)
-export function convertJapanese(dict, text, { accent = true, zhFallback = true } = {}) {
+export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true } = {}) {
   const segs = dict.toKanaDetailed(text);
   let out = "";
   const dropped = [];
@@ -73,7 +73,7 @@ export function convertJapanese(dict, text, { accent = true, zhFallback = true }
       continue;
     }
     // 助词前的下降 (官方行为)
-    if (accent && insertBeforeParticle(segs, i)) out += "'";
+    if (accent && particleAccent && insertBeforeParticle(segs, i)) out += "'";
     const r = s.reading;
     if (accent) {
       const pos = accentPos(r, s.accent, s.mora);

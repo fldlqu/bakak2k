@@ -125,6 +125,8 @@ export class AqK2KDict {
     this.bytes = uint8 instanceof Uint8Array ? uint8 : new Uint8Array(uint8);
     // 读音选择模式: 'cost' (默认, 按词条成本最小, 贴近官方 AqKanji2Koe) | 'first' (旧行为: 取首条)
     this.readingMode = opts.readingMode === 'first' ? 'first' : 'cost';
+    // 分词模式: 'greedy' (默认, 最长匹配) | 'viterbi' (词条 cost 求和最小)
+    this.segmentMode = opts.segmentMode === 'viterbi' ? 'viterbi' : 'greedy';
     const { trie, u32, mapOff, tokOff, tokSize } = parseSections(this.bytes);
     this.trie = trie;
     this.u32 = u32;
@@ -182,11 +184,49 @@ export class AqK2KDict {
     return this._pick(e[0].records);
   }
 
+  // Viterbi 分词: 以词条 cost 求和最小为目标 (实验性; 官方实际用的是带连接成本的形态分析)
+  // 实测: cost 求和会偏好 "たね"(5985) 而非 "た"+"ね"(8152), 故无法修 したね 这类歧义。
+  segmentViterbi(text) {
+    const PASS_COST = 12000, EN_COST = 3000, NUM_COST = 3000;  // 非词典片段的代价
+    const n = text.length;
+    const best = new Array(n + 1).fill(null);
+    best[0] = { cost: 0, prev: -1, node: null };
+    const relax = (j, cost, prev, node) => {
+      if (!best[j] || cost < best[j].cost) best[j] = { cost, prev, node };
+    };
+    for (let i = 0; i < n; i++) {
+      if (!best[i]) continue;
+      const base = best[i].cost;
+      // 词典键 (枚举所有匹配长度)
+      const cap = Math.min(this.maxLen, n - i);
+      for (let L = 1; L <= cap; L++) {
+        const cand = text.slice(i, i + L);
+        const e = this.bySurface.get(cand);
+        if (!e || !e.length) continue;
+        const rec = this._pick(e[0].records);
+        relax(i + L, base + (rec ? rec.cost : 0), i, { surface: cand, reading: rec, id: e[0].id });
+      }
+      // 英文串 / 数字串 / 单字符回退
+      if (/[A-Za-z]/.test(text[i])) {
+        let j = i; while (j < n && /[A-Za-z]/.test(text[j])) j++;
+        relax(j, base + EN_COST, i, { surface: text.slice(i, j), reading: { text: englishToKana(text.slice(i, j)) } });
+      }
+      const m = matchNumber(text, i);
+      if (m) relax(i + m.len, base + NUM_COST, i, { surface: text.slice(i, i + m.len), reading: { text: kanaFromNumber(m.token) } });
+      relax(i + 1, base + PASS_COST, i, { surface: text[i], reading: null });
+    }
+    if (!best[n]) return [{ surface: text, reading: null }];
+    const out = [];
+    for (let at = n; at > 0;) { const b = best[at]; out.push(b.node); at = b.prev; }
+    return out.reverse();
+  }
+
   // Longest-match segment a string into {surface, reading}[].
   // Unknown chars fall back to per-char passthrough (basic kana kept).
   // Consecutive ASCII letters form an English word handled by en_rules;
   // numeric runs are read as Japanese numerals by num.js.
   segment(text) {
+    if (this.segmentMode === 'viterbi') return this.segmentViterbi(text);
     const out = [];
     let i = 0;
     const len = text.length;
