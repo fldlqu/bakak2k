@@ -46,7 +46,8 @@ function decodeRecords(bytes, tokOff, tokSize, rel, rel2) {
     // header = [pos u16][cost u16][flag][moraByte][accByte] ... 数据
     // cost = 词条成本 (越小越优先); 官方 AqKanji2Koe 按 cost 选读音 (实测 108 词)
     const cost = bytes[p + 2] | (bytes[p + 3] << 8);
-    const accent = bytes[p + 6] & 0x3f;
+    const pos = bytes[p] | (bytes[p + 1] << 8);
+    const accent = bytes[p + 6] & 0x1f;
     const isE7 = bytes[p] === 0xe7 && bytes[p + 1] === 0x83;
     let text = '';
     if (isE7) {
@@ -56,7 +57,7 @@ function decodeRecords(bytes, tokOff, tokSize, rel, rel2) {
     } else {
       for (let j = 0; j < mora; j++) text += CODE2KANA[bytes[p + 7 + j]] ?? '';
     }
-    if (text) recs.push({ text, accent, mora, cost });
+    if (text) recs.push({ text, accent, mora, cost, pos });
     p += len;
   }
   return recs;
@@ -284,6 +285,8 @@ export class AqK2KDict {
       reading: normalizeReading(t.reading?.text ?? null),
       accent: t.reading?.accent ?? null,
       mora: t.reading?.mora ?? null,
+      pos: t.reading?.pos ?? null,
+      cost: t.reading?.cost ?? null,
     }));
   }
 

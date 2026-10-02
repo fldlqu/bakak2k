@@ -51,11 +51,112 @@ function insertBeforeParticle(segs, i) {
   return !isRealAccent(before);
 }
 
+// ===========================================================================
+// アクセント句 (phrase) モデル — accentModel: 'phrase'
+// ---------------------------------------------------------------------------
+// 官方 AqKanji2Koe 输出把句子切成アクセント句 (以 / + 、 。 分隔), **每句至多一个 ' 核**。
+// 逆向 (v86 对拍官方 DLL, 同一份 aqdic.bin) 得出的规律:
+//   1. アクセント句 = 自立語 + 后续付属語。
+//   2. 平板头 (accent 0) + 付属語 → 核落在**第一个有核的付属語**上 (位置 = 该付属語起始 + 其 accent)。
+//      例: 飴+まで → アメマ'デ / 会社+です → カイシャデ'ス
+//   3. 有核头 + 付属語 → 头自身的核 (例: 山+は → ヤマ'ワ / 本+です → ホ'ンデス)。
+//   4. 一部の助動詞は頭の核を**上書き**する (位置 = 助動詞起始 + N):
+//      ます+1 / ません+2 / まし+1 / ませ+2 / ましょ+2 / たい+1 / れる+1 / られる+2 /
+//      せる+1 / させる+2 / ながら+1 / そう+1 / よう+1
+//      例: 読み+ます → ヨミマ'ス (読み a1 だがますが上書き)
+//   5. た・て・だ・で・ば・たら・なら などは頭の核を**動かさない** (平板头なら平板)。
+//      例: 借り(a0)+た → カリタ / 食べ(a1)+た → タ'ベタ
+//   6. 動詞未然形 + ない → 核は語幹の最終拍 (尾高化)。例: 食べ(a1,m2)+ない → タベ'ナイ
+//      ただし形容詞連用形 (…ク) + ない は頭の核のまま。例: 高く(a2)+ない → タカ'クナイ
+//   7. 尾高名詞 + の → 平板化。例: 山(a2,m2)+の → ヤマノ
+//   8. 自立語 + 自立語 (複合語) → 後部要素の第1拍に核 (後部が3拍以上)。
+//      例: 天気+予報 → テンキヨ'ホー / 電話+番号 → デンワバ'ンゴー
+//   9. 句末終助詞 (か/ぞ/さ/な/わ/ぜ) が平板の用言に付くと、その用言の最終拍に核 (尾高化)。
+//      例: 行く+か → イク'カ / いる+か → イル'カ。ただし名詞には付かない (会社か → カイシャカ)。
+//  10. て/で + 終助詞 (ね/よ/か/な/わ/ぞ/さ) → て の拍に核。例: して+ね → シテ'ネ
+//      (こちらは名詞+ね = 平板、動詞+ね = 平板 と対照的)
+// ===========================================================================
+
+// 付属語 (助詞・助動詞) を表す品詞ID。公式 aqdic.bin で「アクセント句首に決して来ない」
+// pos を実測して得た集合 (work/probes/_learn_pos.mjs, 3038 句, 2954 句整列)。
+// 未然形 (543) ・自立語・接頭辞 (1167) は除外。
+export const AUX_POS = new Set([
+  120, 33935, 32917, 32972, 253, 32911, 32973, 32914, 33047, 33105, 33032, 119, 33028,
+  274, 33189, 32947, 33039, 33054, 272, 270, 33030, 33002, 277, 177, 33031, 215, 32990,
+  135, 200, 33015, 33496, 127, 107, 32949, 32831, 33160, 363, 239, 319, 114, 33337, 593, 1008, 33056,
+]);
+// 用户词典等无 pos 时的表面形式兜底
+export const AUX_SURF = new Set([
+  'は', 'が', 'を', 'に', 'で', 'と', 'も', 'の', 'へ', 'や', 'から', 'まで', 'より', 'だけ',
+  'しか', 'など', 'ので', 'のに', 'けど', 'けれど', 'ば', 'たら', 'なら', 'ながら', 'ても', 'でも',
+  'て', 'た', 'だ', 'です', 'でし', 'でしょ', 'でしょう', 'ます', 'ません', 'ました', 'ましょう',
+  'ませ', 'まし', 'ましょ', 'ん', 'う', 'よう', 'らしい', 'そう', 'たい', 'ない', 'ぬ', 'ず',
+  'れる', 'られる', 'せる', 'させる', 'ください', 'くらい', 'ほど', 'ばかり', 'こそ', 'さえ',
+  'か', 'ね', 'よ', 'な', 'わ', 'ぞ', 'ぜ', 'さ', 'き', 'つつ', 'がら', 'てく', 'てる', 'ちゃう',
+  'じゃ', 'り', 'る', 'れ', 'す',
+]);
+// 助動詞: 頭の核を上書きする。値 = その助動詞の先頭から数えた核の拍 (1-based)
+export const AUX_NUCLEUS = new Map([
+  ['ます', 1], ['ません', 2], ['まし', 1], ['ませ', 2], ['ましょ', 2],
+  ['たい', 1], ['れる', 1], ['られる', 2], ['せる', 1], ['させる', 2],
+  ['ながら', 1], ['そう', 1], ['よう', 1], ['らしい', 2], ['すぎ', 1],
+  ['ぬ', 1], ['ず', 1], ['ん', 1], ['ちゃう', 1], ['てく', 1],
+]);
+// 頭の核を動かさない付属語 (平板头なら平板)
+export const AUX_HEAD_ONLY = new Set([
+  'た', 'て', 'だ', 'で', 'ば', 'たら', 'なら', 'のに', 'ので', 'けど', 'けれど',
+  'ても', 'でも', 'か', 'ね', 'よ', 'な', 'わ', 'ぞ', 'ぜ', 'さ', 'つつ', 'がら', 'り', 'る', 'れ', 'す',
+]);
+// 動詞未然形 + ない → 語幹最終拍に核 (尾高化)
+const NO_TAIL = new Set(['ない', 'ぬ', 'ん']);
+// 句末終助詞 (尾高化を起こすもの)
+const FIN_PARTICLE = new Set(['か', 'ぞ', 'さ', 'な', 'わ', 'ぜ', 'ね', 'よ']);
+// このうち ね/よ は「て/で の直後」でのみ尾高化する
+const FIN_TE_ONLY = new Set(['ね', 'よ']);
+// 名詞の品詞ID (終助詞の尾高化は名詞には起きない)
+export const NOUN_POS = new Set([
+  981, 33749, 33747, 33752, 33758, 33761, 984, 980, 993, 1171, 1004, 1005, 1006, 1007,
+  1028, 1046, 1084, 1088, 1089, 1100, 32770, 32771, 32772, 33750, 33765,
+]);
+const isNoun = (m) => m.pos != null && NOUN_POS.has(m.pos);
+// 付属語としての核は 0 だが、単独で句首に立つときは辞書の accent を使う助詞・助動詞。
+// (v86 対拍: 借り+た → カリタ / ここ+に+ない → ココニ|ナ'イ / 単独 た → タ')
+const AUX_ZERO_ACCENT = new Set(['た', 'だ', 'て', 'で', 'ば', 'ない', 'ぬ', 'ん', 'のに', 'ので', 'けど', 'けれど', 'ても', 'でも']);
+const auxAccent = (m) => (AUX_ZERO_ACCENT.has(m.surface) ? 0 : m.accent | 0);
+// 複合語 (自立語+自立語) の結合: 後部要素が3拍以上なら接合部に核
+const COMPOUND_MIN_MORA = 3;
+
+function isAuxSeg(s) {
+  if (s.pos != null && AUX_POS.has(s.pos)) return true;
+  return AUX_SURF.has(s.surface);
+}
+function segMora(s) {
+  if (typeof s.mora === 'number') return s.mora;
+  let m = 0; for (const c of (s.reading ?? '')) if (!SMALL_KANA.has(c)) m++;
+  return m;
+}
+// 読み文字列中で「mora 拍目の直後」の文字インデックスを返す
+function moraCut(reading, mora) {
+  if (mora <= 0) return -1;
+  let m = 0;
+  for (let i = 0; i < reading.length; i++) {
+    if (SMALL_KANA.has(reading[i])) continue;
+    m++;
+    if (m === mora) {
+      let j = i;
+      while (j + 1 < reading.length && SMALL_KANA.has(reading[j + 1])) j++;
+      return j + 1;
+    }
+  }
+  return -1;
+}
+
 // 日文路径转换。返回 { kana, dropped }
 //   accent      true = 带 ' 音高
 //   zhFallback  true = 无读音的汉字改用中文读音兜底 (尽力保留内容)
 //   dropped     既无日文读音、中文也读不出的字符 (已丢弃, 不进入引擎)
-export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe' } = {}) {
+export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe', accentModel = 'phrase', compoundJoin = false } = {}) {
+  if (accentModel === 'phrase') return convertJapanesePhrase(dict, text, { accent, zhFallback, compoundJoin });
   const segs = dict.toKanaDetailed(text);
   let out = "";
   const dropped = [];
@@ -89,4 +190,104 @@ export function convertJapanese(dict, text, { accent = true, zhFallback = true, 
     }
   }
   return { kana: out.replace(/[ \u3000]/g, ""), dropped };
+}
+
+// アクセント句モデル本体。dict.toKanaDetailed の結果を句にまとめ、句ごとに核を 1 つだけ置く。
+export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = true, compoundJoin = true } = {}) {
+  const raw = dict.toKanaDetailed(text);
+  const dropped = [];
+  // 出力列を組み立てる: 'text' = そのまま出す (句を切る) / 'seg' = アクセント対象
+  const stream = [];
+  for (const s of raw) {
+    if (!s.reading) {
+      const isHan = HAN_RE.test(s.surface);
+      if (isHan && zhFallback) {
+        const alt = chineseToKana(s.surface);
+        if (alt && !HAN_RE.test(alt)) { stream.push({ kind: 'text', out: alt }); continue; }
+      }
+      if (isHan) { dropped.push(s.surface); continue; }
+      if (/^[、。，．！？!?…‥「」『』（）()\[\]{}ー〜～・,.\-–—:;]+$/.test(s.surface)) stream.push({ kind: 'text', out: s.surface });
+      else stream.push({ kind: 'text', out: s.surface });
+      continue;
+    }
+    stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s) });
+  }
+  // 句にまとめる
+  const groups = [];
+  let cur = null;
+  for (const it of stream) {
+    if (it.kind === 'text') { if (cur) { groups.push(cur); cur = null; } groups.push(it); continue; }
+    if (!cur) { cur = [it]; continue; }
+    const last = cur[cur.length - 1];
+    if (it.aux) { cur.push(it); continue; }              // 付属語は前の句に付く
+    if (last.aux) { groups.push(cur); cur = [it]; continue; }   // 自立語 → 新しい句
+    if (compoundJoin && !it.aux && !last.aux) { cur.push(it); continue; } // 複合語
+    groups.push(cur); cur = [it];
+  }
+  if (cur) groups.push(cur);
+  let out = '';
+  for (const g of groups) {
+    if (!Array.isArray(g)) { out += g.out; continue; }
+    const reading = g.map((m) => m.reading).join('');
+    if (!accent) { out += reading; continue; }
+    const cut = phraseCut(g);
+    out += cut >= 0 ? reading.slice(0, cut) + "'" + reading.slice(cut) : reading;
+  }
+  return { kana: out.replace(/[ \u3000]/g, ''), dropped };
+}
+
+// 句の核位置を読み文字列のインデックスで返す (-1 = 平板)
+function phraseCut(members) {
+  const head = members[0];
+  const H = head.accent | 0, HM = members[0].mora | 0;
+  let target = null; // {j, moraInSeg}
+  // (1) 助動詞による上書き
+  for (let j = 1; j < members.length; j++) {
+    const nuc = AUX_NUCLEUS.get(members[j].surface);
+    if (nuc != null) { target = { j, m: nuc }; break; }
+  }
+  // (2) 動詞未然形 + ない → 語幹最終拍
+  if (!target) {
+    const hasNo = members.some((m, j) => j > 0 && NO_TAIL.has(m.surface));
+    if (hasNo && !/ク$/.test(head.reading)) {
+      if (H > 0) target = { j: 0, m: HM };
+      else return -1;
+    }
+  }
+  // (3) 複合語: 後部要素が3拍以上なら接合部の第1拍
+  if (!target && members.length > 1 && !members[1].aux) {
+    if (members[1].mora >= COMPOUND_MIN_MORA) target = { j: 1, m: 1 };
+    else return -1;
+  }
+  // (4) 頭の核
+  if (!target && H > 0) {
+    // 尾高名詞 + の → 平板化
+    if (HM >= 2 && H === HM && members[1] && members[1].surface === 'の') return -1;
+    target = { j: 0, m: H };
+  }
+  // (5) 平板头 + 句末終助詞 → 直前の語の最終拍に核 (尾高化)
+  //     ね/よ は直前が付属語のときだけ (行く+ね は平板 / ここ+で+ね は ココデ'ネ)。
+  //     か/ぞ/さ/な/わ/ぜ は直前が用言 (名詞以外) でも起きる (行く+か → イク'カ)。
+  if (!target && H === 0 && members.length >= 2) {
+    const last = members[members.length - 1];
+    if (FIN_PARTICLE.has(last.surface)) {
+      const P = members[members.length - 2];
+      const teOnly = FIN_TE_ONLY.has(last.surface);
+      if (P.aux ? true : (!teOnly && !isNoun(P))) {
+        target = { j: members.length - 2, m: P.mora | 0 };
+      }
+    }
+  }
+  // (6) 平板头 → 最初の有核付属語
+  if (!target && H === 0) {
+    for (let j = 1; j < members.length; j++) {
+      const a = auxAccent(members[j]);
+      if (a > 0) { target = { j, m: a }; break; }
+    }
+    if (!target) return -1;
+  }
+  let abs = 0;
+  for (let k = 0; k < target.j; k++) abs += members[k].mora | 0;
+  abs += target.m;
+  return moraCut(members.map((m) => m.reading).join(''), abs);
 }
