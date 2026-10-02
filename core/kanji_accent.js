@@ -8,10 +8,14 @@ import { chineseToKana, chineseToKanaAccent } from "./zh_kana.js";
 export const SMALL_KANA = new Set("ャュョァィゥェォヮヶヵゎ");
 
 // 返回 ' 的插入位置 (字符索引); -1 = 不加
-// 规则 (v86 跑官方 AqKanji2Koe.dll 实证): accent = 核拍(1-based), ' 放在第 accent 拍结束后;
-//   accent=0 或 >mora (平板/助词) 不加。例: 箸 accent=1 → ハ'シ, 東京都 accent=3 → トーキョ'ート
+// 规则 (v86 跑官方 AqKanji2Koe.dll 实证, 汉字输入):
+//   accent = 核拍 (1-based)
+//   accent < mora  → ' 放在第 accent 拍结束后 (词内下降核)
+//   accent == mora → 尾高: ' 放在词尾 (官方: 川→カワ', 山→ヤマ', 花→ハナ', 犬→イヌ')
+//   accent == 0 / > mora (平板・助词) → 不加
 export function accentPos(reading, accent, mora) {
-  if (!(accent >= 1 && accent <= mora)) return -1;
+  if (accent >= 1 && accent === mora) return reading.length;   // 尾高 → 词尾
+  if (!(accent >= 1 && accent < mora)) return -1;
   let m = 0;
   for (let i = 0; i < reading.length; i++) {
     const ch = reading[i];
