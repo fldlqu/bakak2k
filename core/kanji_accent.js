@@ -226,7 +226,7 @@ function moraCut(reading, mora) {
 
 // アクセント句のまとまりを作る (convertJapanesePhrase と debugPhrases で共有)。
 // 注意: 以前は debugPhrases 側に古い複製があり、実際の変換と違う句を表示していた。
-function groupStream(stream, compoundJoin) {
+function groupStream(stream, compoundJoin, compoundChain = true) {
   const groups = [];
   let cur = null;
   for (let si = 0; si < stream.length; si++) {
@@ -260,7 +260,7 @@ function groupStream(stream, compoundJoin) {
     if (last.aux) { groups.push(cur); cur = [it]; continue; }   // 自立語 → 新しい句
     // 複合名詞は 2 語まで (3 語以上の連鎖はしない)。
     // 公式実測: 十年前 → ジュ'ーネン+マエ / 十年前に → ジューネン+マ'エニ (前 が別句になる)。
-    if (compoundJoin && cur.length === 1 && !it.aux && !last.aux && isCompoundNoun(it) && isCompoundNoun(last)) { cur.push(it); continue; }
+    if (compoundJoin && (compoundChain || cur.length === 1) && !it.aux && !last.aux && isCompoundNoun(it) && isCompoundNoun(last)) { cur.push(it); continue; }
     groups.push(cur); cur = [it];
   }
   if (cur) groups.push(cur);
@@ -269,14 +269,14 @@ function groupStream(stream, compoundJoin) {
 
 // デバッグ用: アクセント句のまとまりと核の位置を返す (実際の変換と同じ grouping を使う)
 export function debugPhrases(dict, text, opts = {}) {
-  const { compoundJoin = true } = opts;
+  const { compoundJoin = true, compoundChain = true } = opts;
   const raw = dict.toKanaDetailed(text);
   const stream = [];
   for (const s of raw) {
     if (!s.reading) { stream.push({ kind: 'text', out: s.surface }); continue; }
     stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s) });
   }
-  const groups = groupStream(stream, compoundJoin);
+  const groups = groupStream(stream, compoundJoin, compoundChain);
   return groups.map((g) => (Array.isArray(g)
     ? { phrase: g.map((m) => `${m.surface}[${m.reading}/a${m.accent}/m${m.mora}/p${m.pos}${m.aux ? '/aux' : ''}]`).join(' '), cut: phraseCut(g) }
     : { text: g.out }));
@@ -286,8 +286,8 @@ export function debugPhrases(dict, text, opts = {}) {
 //   accent      true = 带 ' 音高
 //   zhFallback  true = 无读音的汉字改用中文读音兜底 (尽力保留内容)
 //   dropped     既无日文读音、中文也读不出的字符 (已丢弃, 不进入引擎)
-export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe', accentModel = 'phrase', compoundJoin = true, accentRule = 'junction' } = {}) {
-  if (accentModel === 'phrase') return convertJapanesePhrase(dict, text, { accent, zhFallback, compoundJoin, accentRule });
+export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe', accentModel = 'phrase', compoundJoin = true, accentRule = 'junction', compoundChain = true } = {}) {
+  if (accentModel === 'phrase') return convertJapanesePhrase(dict, text, { accent, zhFallback, compoundJoin, accentRule, compoundChain });
   const segs = dict.toKanaDetailed(text);
   let out = "";
   const dropped = [];
@@ -345,7 +345,7 @@ function phraseCuts(members, reading, pos1) {
 }
 
 // アクセント句モデル本体。dict.toKanaDetailed の結果を句にまとめ、句ごとに核を 1 つだけ置く。
-export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = true, compoundJoin = true, accentRule = 'junction' } = {}) {
+export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = true, compoundJoin = true, accentRule = 'junction', compoundChain = true } = {}) {
   const raw = dict.toKanaDetailed(text);
   const dropped = [];
   // 出力列を組み立てる: 'text' = そのまま出す (句を切る) / 'seg' = アクセント対象
@@ -365,7 +365,7 @@ export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = 
     stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s), jcnt: s.jcnt ?? 0, junc: s.junc ?? null });
   }
   // 句にまとめる (debugPhrases と共有)
-  const groups = groupStream(stream, compoundJoin);
+  const groups = groupStream(stream, compoundJoin, compoundChain);
   const pos1 = accentRule === 'junction' ? dict.pos1 : null;
   let out = '';
   for (const g of groups) {
