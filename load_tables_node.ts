@@ -54,7 +54,7 @@ export function kanjiToKanaAccent(text: string): string {
 }
 
 // ---------- 中文 (拼音 → 近似中文发音的片假名) ----------
-export { chineseToKana } from "./core/zh_kana.js";
+export { chineseToKana, chineseToKanaAccent } from "./core/zh_kana.js";
 
 // 判断文本是否更像中文:
 //   含平假名/片假名 → 日文; 纯汉字: 日文词典查不到读音的汉字占比 >= 0.3 → 中文

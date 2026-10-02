@@ -92,3 +92,29 @@ export function chineseToKana(text) {
   }
   return out.join("");
 }
+
+// ---------- 带音高: 中文声调 → AquesTalk アクセント記号 (') ----------
+// AquesTalk 只认 ' = 下降核 (在假名后音高下降); 中文声调近似映射:
+//   4声(去声, 高降 51) → 音节后加 '  (最匹配: 高起后降)
+//   1声(阴平 55) / 2声(阳平 35) / 3声(上声 214) / 轻声 → 不加
+// 注: 日文記号只有"下降", 无法表达升调/降升, 故为近似 (4声位置最明显)
+export function chineseToKanaAccent(text) {
+  if (!text) return "";
+  const tokens = pinyin(text, { toneType: "num", type: "array", nonZh: "consecutive" });
+  const out = [];
+  for (const tok of tokens) {
+    const m = /^([a-zü:v]+)([1-5])?$/i.exec(tok);
+    if (!m) { out.push(tok); continue; }
+    const base = m[1], tone = m[2];
+    const norm = base.toLowerCase().replace(/v/g, "u:").replace(/ü/g, "u:");
+    let kana;
+    if (!P2K[norm] && norm.endsWith("r") && norm.length > 2) {
+      const b = norm.slice(0, -1);
+      kana = P2K[b] ? P2K[b] + "ル" : tok;
+    } else {
+      kana = P2K[norm] ?? tok;
+    }
+    out.push(tone === "4" ? kana + "'" : kana);
+  }
+  return out.join("");
+}
