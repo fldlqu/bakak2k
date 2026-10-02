@@ -266,6 +266,8 @@ export class AqK2KDict {
     const NO_POS = -1;   // 非辞書片 (品詞不明): 連接コスト 0
     const BOS = 0;       // 行列 index 0 は文頭/文末 (全レコードの pos&0x7fff は 1..1181 で 0 は未使用)
     const useEos = this.connMatrix && this.connCost !== 'off' && this.eosCost;
+    // 連接行列が無い辞書 (MTX1 を持たない版) では行列依存の分岐をすべて無効にする。
+    const useMatrix = !!this.connMatrix && this.connCost !== 'off';
     const n = text.length;
     // states[i] : Map<品詞インデックス, {cost, from:文字位置, fromKey, node}>
     const states = new Array(n + 1);
@@ -290,7 +292,7 @@ export class AqK2KDict {
           for (const r of e[0].records) {
             const rp = r.pos;
             const key = rp == null ? NO_POS : (rp & POS_INDEX_MASK);
-            if (key >= this.connW) continue;
+            if (useMatrix && key >= this.connW) continue;
             const c = st.cost + (r.cost ?? 0) + this._connCost(pk === BOS ? BOS : pk, st.node, cand, r);
             relax(i + L, key, c, i, pk, { surface: cand, reading: r, id: e[0].id });
           }

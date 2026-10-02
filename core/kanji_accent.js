@@ -223,26 +223,59 @@ function moraCut(reading, mora) {
   return -1;
 }
 
-// デバッグ用: アクセント句のまとまりと核の位置を返す
+// アクセント句のまとまりを作る (convertJapanesePhrase と debugPhrases で共有)。
+// 注意: 以前は debugPhrases 側に古い複製があり、実際の変換と違う句を表示していた。
+function groupStream(stream, compoundJoin) {
+  const groups = [];
+  let cur = null;
+  for (let si = 0; si < stream.length; si++) {
+    const it = stream[si];
+    if (it.kind === 'text') { if (cur) { groups.push(cur); cur = null; } groups.push(it); continue; }
+    if (!cur) { cur = [it]; continue; }
+    const last = cur[cur.length - 1];
+    // 「て/で + 補助動詞」は補助動詞が新しいアクセント句を始める (付属語判定より優先)。
+    // 実測: 降っているので → フ'ッテ+イル'ノデ / なってきた → ナ'ッテ+キ'タ /
+    //       見ているので → ミ'テ+イル'ノデ / 食べてしまった → タ'ベテ+シマッタ /
+    //       履いています → ハイテイマ'ス (ますが核を持つので結果は同じ)
+    if ((last.surface === 'て' || last.surface === 'で') && HOJO_SURF.has(it.surface)) {
+      groups.push(cur); cur = [it]; continue;
+    }
+    if (it.aux) {
+      // 「よう」はイ形容詞の直後以外では新しいアクセント句を始める (形式名詞/比況)。
+      // 公式実測: 悪い+よう+です → ワル'イヨーデス / 高い+ようだ → タカ'イヨーデス (1 句のまま)
+      //   一方 食べた+よう+です → タ'ベタ+ヨ'ーデス / 降る+ようです → フ'ル+ヨ'ーデス /
+      //   学生+の+ようです → ガクセーノ+ヨ'ーデス / 静か+な+ようです → シ'ズカナ+ヨ'ーデス /
+      //   毎日+の+ように → マイニチノ|ヨ'ーニ。
+      if (it.surface === 'よう' && !isAdj(last)) { groups.push(cur); cur = [it]; continue; }
+      // 「ない」系は助詞の後ろでは自立語 (形容詞「無い」) として新しい句を始める
+      if (NO_TAIL.has(it.surface) && last.aux && PARTICLE_SURF.has(last.surface)) { groups.push(cur); cur = [it]; continue; }
+      // 伝聞「そうです」は終止形のあとで別のアクセント句になる
+      // (公式: 行く+そうです → イク|ソ'ーデス / 降り+そうです → オリソ'ーデス)
+      const nx = stream[si + 1];
+      if (it.surface === 'そう' && nx && nx.kind === 'seg' && (nx.surface === 'です' || nx.surface === 'でし')
+          && isTerminalForm(last)) { groups.push(cur); cur = [it]; continue; }
+      cur.push(it); continue;              // 付属語は前の句に付く
+    }
+    if (last.aux) { groups.push(cur); cur = [it]; continue; }   // 自立語 → 新しい句
+    // 複合名詞は 2 語まで (3 語以上の連鎖はしない)。
+    // 公式実測: 十年前 → ジュ'ーネン+マエ / 十年前に → ジューネン+マ'エニ (前 が別句になる)。
+    if (compoundJoin && cur.length === 1 && !it.aux && !last.aux && isCompoundNoun(it) && isCompoundNoun(last)) { cur.push(it); continue; }
+    groups.push(cur); cur = [it];
+  }
+  if (cur) groups.push(cur);
+  return groups;
+}
+
+// デバッグ用: アクセント句のまとまりと核の位置を返す (実際の変換と同じ grouping を使う)
 export function debugPhrases(dict, text, opts = {}) {
-  const { compoundJoin = false } = opts;
+  const { compoundJoin = true } = opts;
   const raw = dict.toKanaDetailed(text);
   const stream = [];
   for (const s of raw) {
     if (!s.reading) { stream.push({ kind: 'text', out: s.surface }); continue; }
     stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s) });
   }
-  const groups = []; let cur = null;
-  for (const it of stream) {
-    if (it.kind === 'text') { if (cur) { groups.push(cur); cur = null; } continue; }
-    if (!cur) { cur = [it]; continue; }
-    const last = cur[cur.length - 1];
-    if (it.aux) { cur.push(it); continue; }
-    if (last.aux) { groups.push(cur); cur = [it]; continue; }
-    if (compoundJoin && isCompoundNoun(it) && isCompoundNoun(last)) { cur.push(it); continue; }
-    groups.push(cur); cur = [it];
-  }
-  if (cur) groups.push(cur);
+  const groups = groupStream(stream, compoundJoin);
   return groups.map((g) => (Array.isArray(g)
     ? { phrase: g.map((m) => `${m.surface}[${m.reading}/a${m.accent}/m${m.mora}/p${m.pos}${m.aux ? '/aux' : ''}]`).join(' '), cut: phraseCut(g) }
     : { text: g.out }));
@@ -309,42 +342,8 @@ export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = 
     }
     stream.push({ kind: 'seg', surface: s.surface, reading: s.reading, accent: s.accent ?? 0, mora: segMora(s), pos: s.pos, aux: isAuxSeg(s) });
   }
-  // 句にまとめる
-  const groups = [];
-  let cur = null;
-  for (let si = 0; si < stream.length; si++) {
-    const it = stream[si];
-    if (it.kind === 'text') { if (cur) { groups.push(cur); cur = null; } groups.push(it); continue; }
-    if (!cur) { cur = [it]; continue; }
-    const last = cur[cur.length - 1];
-    // 「て/で + 補助動詞」は補助動詞が新しいアクセント句を始める (付属語判定より優先)。
-    // 実測: 降っているので → フ'ッテ+イル'ノデ / なってきた → ナ'ッテ+キ'タ /
-    //       見ているので → ミ'テ+イル'ノデ / 食べてしまった → タ'ベテ+シマッタ /
-    //       履いています → ハイテイマ'ス (ますが核を持つので結果は同じ)
-    if ((last.surface === 'て' || last.surface === 'で') && HOJO_SURF.has(it.surface)) {
-      groups.push(cur); cur = [it]; continue;
-    }
-    if (it.aux) {
-      // 「よう」はイ形容詞の直後以外では新しいアクセント句を始める (形式名詞/比況)。
-      // 公式実測: 悪い+よう+です → ワル'イヨーデス / 高い+ようだ → タカ'イヨーデス (1 句のまま)
-      //   一方 食べた+よう+です → タ'ベタ+ヨ'ーデス / 降る+ようです → フ'ル+ヨ'ーデス /
-      //   学生+の+ようです → ガクセーノ+ヨ'ーデス / 静か+な+ようです → シ'ズカナ+ヨ'ーデス /
-      //   毎日+の+ように → マイニチノ|ヨ'ーニ。
-      if (it.surface === 'よう' && !isAdj(last)) { groups.push(cur); cur = [it]; continue; }
-      // 「ない」系は助詞の後ろでは自立語 (形容詞「無い」) として新しい句を始める
-      if (NO_TAIL.has(it.surface) && last.aux && PARTICLE_SURF.has(last.surface)) { groups.push(cur); cur = [it]; continue; }
-      // 伝聞「そうです」は終止形のあとで別のアクセント句になる
-      // (公式: 行く+そうです → イク|ソ'ーデス / 降り+そうです → オリソ'ーデス)
-      const nx = stream[si + 1];
-      if (it.surface === 'そう' && nx && nx.kind === 'seg' && (nx.surface === 'です' || nx.surface === 'でし')
-          && isTerminalForm(last)) { groups.push(cur); cur = [it]; continue; }
-      cur.push(it); continue;              // 付属語は前の句に付く
-    }
-    if (last.aux) { groups.push(cur); cur = [it]; continue; }   // 自立語 → 新しい句
-    if (compoundJoin && !it.aux && !last.aux && isCompoundNoun(it) && isCompoundNoun(last)) { cur.push(it); continue; } // 複合名詞
-    groups.push(cur); cur = [it];
-  }
-  if (cur) groups.push(cur);
+  // 句にまとめる (debugPhrases と共有)
+  const groups = groupStream(stream, compoundJoin);
   let out = '';
   for (const g of groups) {
     if (!Array.isArray(g)) { out += g.out; continue; }
