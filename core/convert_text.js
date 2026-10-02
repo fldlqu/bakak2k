@@ -43,6 +43,17 @@ export function normalizePunctuation(s) {
   return out;
 }
 
+// ---------- 去掉会造成爆音的 ' ----------
+// 实测: ' 紧跟停顿記号(、。？,)或位于结尾时, AquesTalk 会把当前音在任意幅值处硬切到 0
+// (例: "ドン'、" 切断幅值 14783 = 45% 满幅; "ブ'" 达 66%) → 听感是 "bo" 一类闷响/爆音。
+// ' 的语义是"其后音高下降", 而停顿与结尾本身已是边界, 因此这些位置的 ' 直接去掉。
+const ACCENT_BEFORE_PAUSE = /'(?=[、。？,])/g;
+const ACCENT_AT_END = /'+$/;
+export function stripClickAccents(s) {
+  if (!s) return s;
+  return s.replace(ACCENT_BEFORE_PAUSE, "").replace(ACCENT_AT_END, "");
+}
+
 // 自动判别该段是中文还是日文:
 //   含平假名/片假名 → 日文 (日文句子必有假名)
 //   纯汉字: 日文词典查不到读音的汉字占比 >= 0.3 → 中文
@@ -72,7 +83,7 @@ export function convertSegments(dict, text, { flat = false, forceLang = null } =
     if (!seg.text) continue;
     // 纯标点/符号段: 两条路径结果相同, 不判定语言
     if (!CONTENT_RE.test(seg.text)) {
-      parts.push({ text: seg.text, lang: null, zh: null, source: "none", kana: normalizePunctuation(seg.text) });
+      parts.push({ text: seg.text, lang: null, zh: null, source: "none", kana: stripClickAccents(normalizePunctuation(seg.text)) });
       continue;
     }
     let source, zh;
@@ -88,7 +99,8 @@ export function convertSegments(dict, text, { flat = false, forceLang = null } =
       dropped.push(...r.dropped);
     }
     // 标点归一化 (中文 ，！ 等 → AquesTalk 认得的停顿記号)
-    parts.push({ text: seg.text, lang: seg.lang, zh, source, kana: normalizePunctuation(kana) });
+    parts.push({ text: seg.text, lang: seg.lang, zh, source, kana: stripClickAccents(normalizePunctuation(kana)) });
   }
-  return { parts, kana: parts.map((p) => p.kana).join(""), dropped, tags };
+  // 跨段边界也可能出现 ' 紧跟停顿 (前段结尾的 ' + 后段开头的停顿), 故对拼接结果再做一次
+  return { parts, kana: stripClickAccents(parts.map((p) => p.kana).join("")), dropped, tags };
 }
