@@ -216,7 +216,8 @@ export function fca9a0(node, pos1) {
 export function boundaryTypes(nodes, pos1) {
   const n = nodes.length;
   const t42 = new Array(n).fill(0);
-  if (!n) return t42;
+  // 公式は語数 < 2 のとき何もせず戻る (0xbc17: cmp eax,2 / jc 0xc3d3) ので、型は全て 0 のまま。
+  if (n < 2) return t42;
   t42[0] = 1;                                   // 0xbc30: 先頭語は常に 1
   const cl = (x) => (pos1 && x && (x.idx ?? x.posIdx) != null &&
                      (x.idx ?? x.posIdx) < pos1.count) ? pos1.table[x.idx ?? x.posIdx] : null;
