@@ -122,16 +122,18 @@ const TAIL_PARTICLE = new Set(['か', 'ぞ', 'さ', 'な', 'わ', 'ぜ', 'ね', 
 const FIN_TE_ONLY = new Set(['ね', 'よ']);
 // イ形容詞 (終止形) の品詞ID。アクセント核は語幹最終拍 = 終止形の最終拍-1 に来る。
 // (v86 対拍: おいしい(a0)+です → オイシ'イデス / 重い(a0)+か → オモ'イカ)
-export const ADJ_POS = new Set([33856, 33876, 1028, 1088]);
+export const ADJ_POS = new Set([33856, 33876, 1028, 1088, 1089]);
 const isAdj = (m) => m.pos != null && ADJ_POS.has(m.pos);
 // 名詞の品詞ID (終助詞の尾高化は名詞には起きない)
 export const NOUN_POS = new Set([
   981, 33749, 33747, 33752, 33758, 33761, 984, 980, 993, 1171, 1004, 1005, 1006, 1007,
-  1028, 1046, 1084, 1088, 1089, 1100, 32770, 32771, 32772, 33750, 33765,
+  1046, 1100, 32770, 32771, 32772, 33750, 33765,
 ]);
 const isNoun = (m) => m.pos != null && NOUN_POS.has(m.pos);
-// 複合名詞 (名詞+名詞) を 1 アクセント句にまとめてよい品詞 (副詞・連体詞・ナ形容詞は除外)
-export const COMPOUND_NOUN_POS = new Set([...NOUN_POS].filter((p) => ![32770, 32771, 32772, 33949, 33761].includes(p)));
+// 複合名詞 (名詞+名詞) を 1 アクセント句にまとめてよい品詞。
+// 副詞・連体詞・ナ形容詞、および時間名詞 (毎日/昨日/毎週/朝 など pos 984, 33752) は除外。
+// 公式: 天気(a1)+予報 → テンキヨ'ホー (1 句) だが 毎日+日本語 → ヌ'イヌチ/ヌホンゴオ (別句)。
+export const COMPOUND_NOUN_POS = new Set([...NOUN_POS].filter((p) => ![32770, 32771, 32772, 33949, 33761, 984, 33752].includes(p)));
 const isCompoundNoun = (m) => m.pos != null && COMPOUND_NOUN_POS.has(m.pos);
 // 助詞 (付属語のうち格助詞・係助詞・終助詞・接続助詞)。助動詞と区別するために使う。
 // 動詞未然形につく「ない」は助動詞だが、助詞の後ろでは形容詞「無い」として自立する。
@@ -205,7 +207,7 @@ export function debugPhrases(dict, text, opts = {}) {
 //   accent      true = 带 ' 音高
 //   zhFallback  true = 无读音的汉字改用中文读音兜底 (尽力保留内容)
 //   dropped     既无日文读音、中文也读不出的字符 (已丢弃, 不进入引擎)
-export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe', accentModel = 'phrase', compoundJoin = false } = {}) {
+export function convertJapanese(dict, text, { accent = true, zhFallback = true, particleAccent = true, accentPolicy = 'dedupe', accentModel = 'phrase', compoundJoin = true } = {}) {
   if (accentModel === 'phrase') return convertJapanesePhrase(dict, text, { accent, zhFallback, compoundJoin });
   const segs = dict.toKanaDetailed(text);
   let out = "";
