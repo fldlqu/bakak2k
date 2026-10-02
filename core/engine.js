@@ -10,6 +10,41 @@ import { englishToKana } from './en_rules.js';
 import { matchNumber, kanaFromNumber } from './num.js';
 
 const MASTER_OFFSET = 0x2b395c;
+// 連接コスト行列 (MTXD/MTX1) の位置。aqdic.bin 内で 1 箇所だけ。
+const MATRIX_OFFSET = 0x9640;
+
+// 品詞 u16 の下位 15bit が連接コスト行列の行/列インデックス。
+// (実測: 全 384100 レコードの pos & 0x7fff は 0..1181 に収まり、行列の次数 1182 と一致)
+const POS_INDEX_MASK = 0x7fff;
+
+// aqdic.bin から MTXD/MTX1 (連接コスト行列) を読む。
+// 形式: "MTXD"[u32 size] "MTX1"[u32 size] [u16 w][u16 h] w*h*i16
+//   連接コスト(prev→next) = M[next.pos & 0x7fff][prev.pos & 0x7fff]
+//   (v86 上の公式 DLL の辞書イメージを 1 セルずつ書き換える差分実験で確定:
+//    昨夜は の [204][981] を +32767 にすると ユンベ'ワ → サク'ヤワ に反転する)
+// 見つからなければ null (連接コスト近似にフォールバック)。
+function parseConnMatrix(bytes, u32) {
+  const u16 = (o) => bytes[o] | (bytes[o + 1] << 8);
+  const i16 = (o) => (u16(o) << 16) >> 16;
+  const tag = (o, s) => s.split('').every((c, i) => bytes[o + i] === c.charCodeAt(0));
+  let off = MATRIX_OFFSET;
+  if (!tag(off, 'MTXD') || !tag(off + 8, 'MTX1')) {
+    // 念のため走査で探す (辞書のリビジョン差に耐える)
+    off = -1;
+    for (let o = 0; o + 16 <= bytes.length; o++) {
+      if (bytes[o] === 0x4d && bytes[o + 1] === 0x54 && bytes[o + 2] === 0x58 && bytes[o + 3] === 0x44 &&
+          bytes[o + 8] === 0x4d && bytes[o + 9] === 0x54 && bytes[o + 10] === 0x58 && bytes[o + 11] === 0x31) { off = o; break; }
+    }
+    if (off < 0) return null;
+  }
+  const w = u16(off + 16), h = u16(off + 18);
+  const dataOff = off + 20;
+  const need = dataOff + w * h * 2;
+  if (w < 2 || h < 2 || need > bytes.length) return null;
+  const m = new Int16Array(w * h);
+  for (let i = 0; i < m.length; i++) m[i] = i16(dataOff + i * 2);
+  return { w, h, m };
+}
 
 // 連接コスト近似用: 名詞を表す品詞ID (_connCost 参照)
 const NOUN_POS = new Set([
@@ -137,7 +172,15 @@ export class AqK2KDict {
     this.readingMode = opts.readingMode === 'first' ? 'first' : 'cost';
     // 分词模式: 'viterbi' (默认, 词条 cost 求和最小; 官方形态分析的近似) | 'greedy' (最长匹配)
     this.segmentMode = opts.segmentMode === 'greedy' ? 'greedy' : 'viterbi';
+    // 連接コスト: 'matrix' (默认, aqdic.bin 内の公式 MTX1 行列をそのまま使う) |
+    //             'approx' (旧: 名詞+動詞語尾の禁止ペナルティのみ) | 'off' (連接コスト無し)
+    this.connCost = opts.connCost === 'approx' || opts.connCost === 'off' ? opts.connCost : 'matrix';
+    // 文頭/文末 (行列 index 0) への連接コストを使うか
+    this.eosCost = opts.eosCost !== false && opts.bosEosCost !== false;
     const { trie, u32, mapOff, tokOff, tokSize } = parseSections(this.bytes);
+    const cm = this.connCost === 'matrix' ? parseConnMatrix(this.bytes, u32) : null;
+    this.connMatrix = cm ? cm.m : null;
+    this.connW = cm ? cm.w : 0;
     this.trie = trie;
     this.u32 = u32;
     this.mapOff = mapOff;
@@ -194,30 +237,47 @@ export class AqK2KDict {
     return this._pick(e[0].records);
   }
 
-  // 連接コスト (近似)。公式 AqKanji2Koe は品詞間の連接コストで形態素を選ぶ。
-  // ここでは「名詞の直後に動詞活用語尾 (す/る/れ/せ/ろ) が来る」連接を禁止する。
-  // 公式: 「遊んでいます」は アソンデ+イマ'ス (= い+ます) で、いま+す ではない。
-  //   cost 和では いま(2377)+す(6951)=9328 < い(6811)+ます(3912)=10723 となり誤るため。
-  _connCost(prevNode, cand, rec) {
-    if (!prevNode || !prevNode.reading || !rec) return 0;
+  // 連接コスト。既定では aqdic.bin 内の公式 MTX1 行列を使う:
+  //   cost(prev → next) = M[next.pos & 0x7fff][prev.pos & 0x7fff]
+  // prevIdx は直前語の「品詞インデックス」(pos & 0x7fff)。0 は文頭/文末 (BOS/EOS)。
+  // 行列が無い場合は旧近似 (名詞の直後に動詞活用語尾 す/る/れ/せ/ろ を禁止)。
+  _connCost(prevIdx, prevNode, cand, rec) {
+    if (this.connCost === 'off' || !rec) return 0;
+    if (this.connMatrix) {
+      const cp = rec.pos;
+      if (cp == null || prevIdx == null || prevIdx < 0) return 0;
+      const r = cp & POS_INDEX_MASK;
+      if (r < this.connW && prevIdx < this.connW) return this.connMatrix[r * this.connW + prevIdx];
+      return 0;
+    }
+    if (!prevNode || !prevNode.reading) return 0;
     const pp = prevNode.reading.pos;
     if (pp == null || !NOUN_POS.has(pp)) return 0;
     return VERB_END_SURF.has(cand) ? VERB_END_PENALTY : 0;
   }
 
-  // Viterbi 分词: 以词条 cost 求和最小为目标 (实验性; 官方实际用的是带连接成本的形态分析)
-  // 实测: cost 求和会偏好 "たね"(5985) 而非 "た"+"ね"(8152), 故无法修 したね 这类歧义。
+  // Viterbi 分詞 (連接コスト込み)。
+  // 重要: 連接コストは「直前語の品詞」に依存するため、位置ごとに 1 個だけ最良を残す
+  // 素朴な DP では不正解になる (実測: 何度も → 何(ナニ)+度 を選び、公式の 何(ナン)+度 を落とす。
+  //   位置 1 では ナニ(5251) < ナン(8297) だが、度への連接が -4464 vs -10114 で逆転する)。
+  // よって状態 = (文字位置, 直前語の品詞インデックス) とする。
   segmentViterbi(text) {
     const PASS_COST = 12000, EN_COST = 3000, NUM_COST = 3000;  // 非词典片段的代价
+    const NO_POS = -1;   // 非辞書片 (品詞不明): 連接コスト 0
+    const BOS = 0;       // 行列 index 0 は文頭/文末 (全レコードの pos&0x7fff は 1..1181 で 0 は未使用)
+    const useEos = this.connMatrix && this.connCost !== 'off' && this.eosCost;
     const n = text.length;
-    const best = new Array(n + 1).fill(null);
-    best[0] = { cost: 0, prev: -1, node: null };
-    const relax = (j, cost, prev, node) => {
-      if (!best[j] || cost < best[j].cost) best[j] = { cost, prev, node };
+    // states[i] : Map<品詞インデックス, {cost, from:文字位置, fromKey, node}>
+    const states = new Array(n + 1);
+    for (let i = 0; i <= n; i++) states[i] = new Map();
+    const relax = (j, key, cost, from, fromKey, node) => {
+      const cur = states[j].get(key);
+      if (!cur || cost < cur.cost) states[j].set(key, { cost, from, fromKey, node });
     };
+    states[0].set(BOS, { cost: 0, from: -1, fromKey: -1, node: null });
     for (let i = 0; i < n; i++) {
-      if (!best[i]) continue;
-      const base = best[i].cost;
+      const src = states[i];
+      if (src.size === 0) continue;
       // 词典键 (枚举所有匹配长度)
       const cap = Math.min(this.maxLen, n - i);
       for (let L = 1; L <= cap; L++) {
@@ -226,25 +286,40 @@ export class AqK2KDict {
         if (!e || !e.length) continue;
         // 全レコードを連接コスト込みで評価する (文脈によって読みが変わるため。
         // 例: 十時 → ジ, 誕生日 → ビ, 外国語 → ゴ は cost 最小レコードではない)
-        let bestRec = null, bestCost = Infinity;
-        for (const r of e[0].records) {
-          const c = (r.cost ?? 0) + this._connCost(best[i].node, cand, r);
-          if (c < bestCost) { bestCost = c; bestRec = r; }
+        for (const [pk, st] of src) {
+          for (const r of e[0].records) {
+            const rp = r.pos;
+            const key = rp == null ? NO_POS : (rp & POS_INDEX_MASK);
+            if (key >= this.connW) continue;
+            const c = st.cost + (r.cost ?? 0) + this._connCost(pk === BOS ? BOS : pk, st.node, cand, r);
+            relax(i + L, key, c, i, pk, { surface: cand, reading: r, id: e[0].id });
+          }
         }
-        relax(i + L, base + bestCost, i, { surface: cand, reading: bestRec, id: e[0].id });
       }
-      // 英文串 / 数字串 / 单字符回退
+      // 英文串 / 数字串 / 单字符回退 (非辞書片: 品詞不明なので NO_POS 状態へ、連接コスト 0)
+      const passthrough = (j, cost, node) => {
+        for (const [pk, st] of src) relax(j, NO_POS, st.cost + cost, i, pk, node);
+      };
       if (/[A-Za-z]/.test(text[i])) {
         let j = i; while (j < n && /[A-Za-z]/.test(text[j])) j++;
-        relax(j, base + EN_COST, i, { surface: text.slice(i, j), reading: { text: englishToKana(text.slice(i, j)) } });
+        passthrough(j, EN_COST, { surface: text.slice(i, j), reading: { text: englishToKana(text.slice(i, j)) } });
       }
       const m = matchNumber(text, i);
-      if (m) relax(i + m.len, base + NUM_COST, i, { surface: text.slice(i, i + m.len), reading: { text: kanaFromNumber(m.token) } });
-      relax(i + 1, base + PASS_COST, i, { surface: text[i], reading: null });
+      if (m) passthrough(i + m.len, NUM_COST, { surface: text.slice(i, i + m.len), reading: { text: kanaFromNumber(m.token) } });
+      passthrough(i + 1, PASS_COST, { surface: text[i], reading: null });
     }
-    if (!best[n]) return [{ surface: text, reading: null }];
+    const fin = states[n];
+    if (fin.size === 0) return [{ surface: text, reading: null }];
+    // 文末: EOS (index 0) への連接コスト M[0][last] = matrix[last] を加えて最小を選ぶ
+    let bestTotal = Infinity, bestSt = null;
+    for (const [k, st] of fin) {
+      const ec = (useEos && k !== NO_POS && k < this.connW) ? this.connMatrix[k] : 0;
+      const t = st.cost + ec;
+      if (t < bestTotal) { bestTotal = t; bestSt = st; }
+    }
     const out = [];
-    for (let at = n; at > 0;) { const b = best[at]; out.push(b.node); at = b.prev; }
+    let cur = bestSt;
+    while (cur && cur.node) { out.push(cur.node); cur = cur.from < 0 ? null : states[cur.from].get(cur.fromKey); }
     return out.reverse();
   }
 
