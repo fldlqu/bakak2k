@@ -397,6 +397,8 @@ function phraseCut(members) {
     if (members[1].mora >= COMPOUND_MIN_MORA) target = { j: 1, m: 1 };
   }
   // (4) 頭の核
+  //     注意: 1 拍語 accent 1 でも核を実現する (公式実測: 手+は → テ'ワ / 木+に → キ'ニ)。
+  //     1 拍の accent 1 を「実現しない」と扱うと DEV 136→134 / 保留 83→79 と悪化する。
   if (!target && H > 0) {
     // 尾高名詞 + の → 平板化
     if (HM >= 2 && H === HM && members[1] && members[1].surface === 'の') return -1;
@@ -440,6 +442,7 @@ function phraseCut(members) {
     }
     if (!target) return -1;
   }
+  if (!target) return -1;   // どの規則にも該当しない = 平板
   let abs = 0;
   for (let k = 0; k < target.j; k++) abs += members[k].mora | 0;
   abs += target.m;
