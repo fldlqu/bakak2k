@@ -43,15 +43,15 @@ export function normalizePunctuation(s) {
   return out;
 }
 
-// ---------- 去掉会造成爆音的 ' ----------
-// 实测: ' 紧跟停顿記号(、。？,)或位于结尾时, AquesTalk 会把当前音在任意幅值处硬切到 0
-// (例: "ドン'、" 切断幅值 14783 = 45% 满幅; "ブ'" 达 66%) → 听感是 "bo" 一类闷响/爆音。
-// ' 的语义是"其后音高下降", 而停顿与结尾本身已是边界, 因此这些位置的 ' 直接去掉。
+// ---------- 停顿前 ' 的去爆音处理 ----------
+// 实测: ' 紧跟停顿記号(、。？,) 时 AquesTalk 会把当前音在任意幅值处硬切到 0
+// (例: "ドン'、" 切断幅值 14783 = 45% 满幅) → 听感是 "bo" 一类闷响/爆音。
+// ' 的语义是"其后音高下降", 而停顿本身已是边界; 官方输出也从不让 ' 紧邻停顿, 故这些位置去掉。
+// 注: 文本**末尾**的尾高 ' (官方: 川→カワ') 按"完全保真"保留, 不处理。
 const ACCENT_BEFORE_PAUSE = /'(?=[、。？,])/g;
-const ACCENT_AT_END = /'+$/;
 export function stripClickAccents(s) {
   if (!s) return s;
-  return s.replace(ACCENT_BEFORE_PAUSE, "").replace(ACCENT_AT_END, "");
+  return s.replace(ACCENT_BEFORE_PAUSE, "");
 }
 
 // 自动判别该段是中文还是日文:
