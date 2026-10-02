@@ -93,7 +93,7 @@ export const AUX_SURF = new Set([
   'しか', 'など', 'ので', 'のに', 'けど', 'けれど', 'ば', 'たら', 'なら', 'ながら', 'ても', 'でも',
   'て', 'た', 'だ', 'です', 'でし', 'でしょ', 'でしょう', 'ます', 'ません', 'ました', 'ましょう',
   'ませ', 'まし', 'ましょ', 'ん', 'う', 'よう', 'らしい', 'そう', 'たい', 'ない', 'ぬ', 'ず',
-  'れる', 'られる', 'せる', 'させる', 'くらい', 'ほど', 'ばかり', 'こそ', 'さえ',
+  'れる', 'られる', 'せる', 'させる', 'より', 'やすい', 'やすかっ', 'やすく', 'やすけれ', 'にくい', 'すぎ', 'くらい', 'ほど', 'ばかり', 'こそ', 'さえ',
   'か', 'ね', 'よ', 'な', 'わ', 'ぞ', 'ぜ', 'さ', 'き', 'つつ', 'がら', 'てく', 'てる', 'ちゃう',
   'じゃ', 'り', 'る', 'れ', 'す',
 ]);
@@ -103,6 +103,7 @@ export const AUX_NUCLEUS = new Map([
   ['たい', 1], ['れる', 1], ['られる', 2], ['せる', 1], ['させる', 2],
   ['られ', 2], ['させ', 2], ['れ', 1], ['せ', 1],
   ['ながら', 1], ['そう', 1],
+  ['やすい', 2], ['やすかっ', 2], ['やすく', 2], ['やすけれ', 2], ['にくい', 2], ['すぎ', 2],
   ['ぬ', 1], ['ず', 1], ['ん', 1], ['ちゃう', 1], ['てく', 1],
 ]);
 // 頭の核を動かさない付属語 (平板头なら平板)
@@ -129,11 +130,14 @@ export const NOUN_POS = new Set([
   1028, 1046, 1084, 1088, 1089, 1100, 32770, 32771, 32772, 33750, 33765,
 ]);
 const isNoun = (m) => m.pos != null && NOUN_POS.has(m.pos);
+// 複合名詞 (名詞+名詞) を 1 アクセント句にまとめてよい品詞 (副詞・連体詞・ナ形容詞は除外)
+export const COMPOUND_NOUN_POS = new Set([...NOUN_POS].filter((p) => ![32770, 32771, 32772, 33949, 33761].includes(p)));
+const isCompoundNoun = (m) => m.pos != null && COMPOUND_NOUN_POS.has(m.pos);
 // 付属語としての核は 0 だが、単独で句首に立つときは辞書の accent を使う助詞・助動詞。
 // (v86 対拍: 借り+た → カリタ / ここ+に+ない → ココニ|ナ'イ / 単独 た → タ')
 const AUX_ZERO_ACCENT = new Set(['た', 'だ', 'て', 'で', 'ば', 'ない', 'ぬ', 'ん', 'のに', 'ので', 'けど', 'けれど', 'ても', 'でも']);
 // 辞書の accent 値ではなく実測値を使う付属語 (でしょ は +2: 学生でしょう → ガクセーデ'ショー)
-const AUX_ACCENT_FIX = new Map([['でしょ', 2]]);
+const AUX_ACCENT_FIX = new Map([['でしょ', 2], ['より', 1]]);
 const auxAccent = (m) => (AUX_ZERO_ACCENT.has(m.surface) ? 0 : (AUX_ACCENT_FIX.get(m.surface) ?? (m.accent | 0)));
 // 複合語 (自立語+自立語) の結合: 後部要素が3拍以上なら接合部に核
 const COMPOUND_MIN_MORA = 3;
@@ -233,7 +237,7 @@ export function convertJapanesePhrase(dict, text, { accent = true, zhFallback = 
     const last = cur[cur.length - 1];
     if (it.aux) { cur.push(it); continue; }              // 付属語は前の句に付く
     if (last.aux) { groups.push(cur); cur = [it]; continue; }   // 自立語 → 新しい句
-    if (compoundJoin && !it.aux && !last.aux) { cur.push(it); continue; } // 複合語
+    if (compoundJoin && !it.aux && !last.aux && isCompoundNoun(it) && isCompoundNoun(last)) { cur.push(it); continue; } // 複合名詞
     groups.push(cur); cur = [it];
   }
   if (cur) groups.push(cur);
@@ -257,10 +261,10 @@ function phraseCut(members) {
   const head = members[0];
   const H = head.accent | 0, HM = members[0].mora | 0;
   let target = null; // {j, moraInSeg}
-  // (1) 助動詞による上書き
+  // (1) 助動詞による上書き (後方優先: 難し+すぎ+ます は ます が勝つ)
   for (let j = 1; j < members.length; j++) {
     const nuc = AUX_NUCLEUS.get(members[j].surface);
-    if (nuc != null) { target = { j, m: nuc }; break; }
+    if (nuc != null) target = { j, m: nuc };
   }
   // (2) 動詞未然形 + ない → 語幹最終拍
   if (!target) {
@@ -270,10 +274,9 @@ function phraseCut(members) {
       else return -1;
     }
   }
-  // (3) 複合語: 後部要素が3拍以上なら接合部の第1拍
+  // (3) 複合名詞: 後部要素が3拍以上なら接合部の第1拍 (2拍以下は頭の核にフォールバック)
   if (!target && members.length > 1 && !members[1].aux) {
     if (members[1].mora >= COMPOUND_MIN_MORA) target = { j: 1, m: 1 };
-    else return -1;
   }
   // (4) 頭の核
   if (!target && H > 0) {
