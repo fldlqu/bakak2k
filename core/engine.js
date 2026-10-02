@@ -11,6 +11,15 @@ import { matchNumber, kanaFromNumber } from './num.js';
 
 const MASTER_OFFSET = 0x2b395c;
 
+// 連接コスト近似用: 名詞を表す品詞ID (_connCost 参照)
+const NOUN_POS = new Set([
+  981, 33749, 33747, 33752, 33758, 33761, 984, 980, 993, 1171, 1004, 1005, 1006, 1007,
+  1046, 1100, 32770, 32771, 32772, 33750, 33765,
+]);
+// 名詞の直後に来てはいけない動詞活用語尾
+const VERB_END_SURF = new Set(['す', 'る', 'れ', 'せ', 'ろ']);
+const VERB_END_PENALTY = 5000;
+
 function parseSections(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const u32 = (o) => dv.getUint32(o, true);
@@ -185,6 +194,17 @@ export class AqK2KDict {
     return this._pick(e[0].records);
   }
 
+  // 連接コスト (近似)。公式 AqKanji2Koe は品詞間の連接コストで形態素を選ぶ。
+  // ここでは「名詞の直後に動詞活用語尾 (す/る/れ/せ/ろ) が来る」連接を禁止する。
+  // 公式: 「遊んでいます」は アソンデ+イマ'ス (= い+ます) で、いま+す ではない。
+  //   cost 和では いま(2377)+す(6951)=9328 < い(6811)+ます(3912)=10723 となり誤るため。
+  _connCost(prevNode, cand, rec) {
+    if (!prevNode || !prevNode.reading || !rec) return 0;
+    const pp = prevNode.reading.pos;
+    if (pp == null || !NOUN_POS.has(pp)) return 0;
+    return VERB_END_SURF.has(cand) ? VERB_END_PENALTY : 0;
+  }
+
   // Viterbi 分词: 以词条 cost 求和最小为目标 (实验性; 官方实际用的是带连接成本的形态分析)
   // 实测: cost 求和会偏好 "たね"(5985) 而非 "た"+"ね"(8152), 故无法修 したね 这类歧义。
   segmentViterbi(text) {
@@ -205,7 +225,7 @@ export class AqK2KDict {
         const e = this.bySurface.get(cand);
         if (!e || !e.length) continue;
         const rec = this._pick(e[0].records);
-        relax(i + L, base + (rec ? rec.cost : 0), i, { surface: cand, reading: rec, id: e[0].id });
+        relax(i + L, base + (rec ? rec.cost : 0) + this._connCost(best[i].node, cand, rec), i, { surface: cand, reading: rec, id: e[0].id });
       }
       // 英文串 / 数字串 / 单字符回退
       if (/[A-Za-z]/.test(text[i])) {
