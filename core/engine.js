@@ -43,6 +43,9 @@ function decodeRecords(bytes, tokOff, tokSize, rel, rel2) {
     const extra = extraCnt(flag);
     const len = 7 + mora + extra;
     if (p + len > end) break;
+    // header = [pos u16][cost u16][flag][moraByte][accByte] ... 数据
+    // cost = 词条成本 (越小越优先); 官方 AqKanji2Koe 按 cost 选读音 (实测 108 词)
+    const cost = bytes[p + 2] | (bytes[p + 3] << 8);
     const accent = bytes[p + 6] & 0x3f;
     const isE7 = bytes[p] === 0xe7 && bytes[p + 1] === 0x83;
     let text = '';
@@ -53,10 +56,23 @@ function decodeRecords(bytes, tokOff, tokSize, rel, rel2) {
     } else {
       for (let j = 0; j < mora; j++) text += CODE2KANA[bytes[p + 7 + j]] ?? '';
     }
-    if (text) recs.push({ text, accent, mora });
+    if (text) recs.push({ text, accent, mora, cost });
     p += len;
   }
   return recs;
+}
+
+// 选最佳读音: 官方 AqKanji2Koe.dll 按词条 cost 最小选择
+// (v86 跑官方 DLL 对拍 109 词: cost 模式 89.9% vs "取首条" 82.6%)。
+// 平局取先出现的记录。无 cost 字段 (如用户词典) 时回退取首条, 保持原行为。
+function bestRecord(records) {
+  if (!records || records.length === 0) return null;
+  let best = records[0], bc = records[0].cost ?? 0;
+  for (let i = 1; i < records.length; i++) {
+    const c = records[i].cost ?? 0;
+    if (c < bc) { best = records[i]; bc = c; }
+  }
+  return best;
 }
 
 // Max UTF-16 length of any surface in the trie (caps scanning cost).
@@ -105,8 +121,10 @@ export function normalizeReading(s) {
 }
 
 export class AqK2KDict {
-  constructor(uint8) {
+  constructor(uint8, opts = {}) {
     this.bytes = uint8 instanceof Uint8Array ? uint8 : new Uint8Array(uint8);
+    // 读音选择模式: 'cost' (默认, 按词条成本最小, 贴近官方 AqKanji2Koe) | 'first' (旧行为: 取首条)
+    this.readingMode = opts.readingMode === 'first' ? 'first' : 'cost';
     const { trie, u32, mapOff, tokOff, tokSize } = parseSections(this.bytes);
     this.trie = trie;
     this.u32 = u32;
@@ -151,11 +169,17 @@ export class AqK2KDict {
     return this.bySurface.get(surface);
   }
 
-  // Best reading (first record of the first entry) for a surface.
+  // 按 readingMode 选读音: 'cost' → 词条成本最小 (贴近官方) | 'first' → 首条 (旧行为)
+  _pick(records) {
+    if (!records || records.length === 0) return null;
+    return this.readingMode === 'first' ? records[0] : bestRecord(records);
+  }
+
+  // Best reading for a surface (按 readingMode 选择).
   reading(surface) {
     const e = this.bySurface.get(surface);
     if (!e || e.length === 0) return null;
-    return e[0].records[0] ?? null;
+    return this._pick(e[0].records);
   }
 
   // Longest-match segment a string into {surface, reading}[].
@@ -189,7 +213,7 @@ export class AqK2KDict {
         const cand = text.slice(i, i + L);
         const e = this.bySurface.get(cand);
         if (e && e.length) {
-          best = { surface: cand, reading: e[0].records[0] ?? null, id: e[0].id };
+          best = { surface: cand, reading: this._pick(e[0].records), id: e[0].id };
           break;
         }
       }
@@ -239,25 +263,26 @@ export class AqK2KDict {
 }
 
 // Convenience: build from a Uint8Array (Node readFile / browser fetch arrayBuffer).
-export function createDict(uint8Array) {
-  return new AqK2KDict(uint8Array);
+// opts = { readingMode: 'cost' | 'first' }
+export function createDict(uint8Array, opts) {
+  return new AqK2KDict(uint8Array, opts);
 }
 
 // Async convenience: build from bytes that may be either aqdic.bin or a zip
 // containing it.
-export async function createDictAuto(bytes) {
+export async function createDictAuto(bytes, opts) {
   if (bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b &&
       (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)) {
     const { extractAqdicFromZip } = await import('./zip.js');
-    return new AqK2KDict(await extractAqdicFromZip(bytes));
+    return new AqK2KDict(await extractAqdicFromZip(bytes), opts);
   }
-  return new AqK2KDict(bytes);
+  return new AqK2KDict(bytes, opts);
 }
 
 // Build a dict from the system dictionary (aqdic.bin bytes) plus a user
 // dictionary (aq_user.dic bytes). User words override the system dictionary.
-export function createDictWithUser(sysBytes, userBytes) {
-  const dict = new AqK2KDict(sysBytes);
+export function createDictWithUser(sysBytes, userBytes, opts) {
+  const dict = new AqK2KDict(sysBytes, opts);
   dict.mergeUserDict(userBytes);
   return dict;
 }
