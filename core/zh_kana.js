@@ -36,6 +36,34 @@ const FINALS = {
   "u:": [1, "ュ"], "u:e": [1, "ュエ"], "u:an": [1, "ュエン"], "u:n": [1, "ュン"],
 };
 
+// 合法音节结构: 声母 → 该声母可拼的韵母 (普通话音节表)
+// 由 CJK 全域 (基本区+扩展A/B+兼容区, 共 4 区块) 的 pinyin-pro 输出反查得出, 覆盖 407 个真实音节。
+// 只有这里列出的组合才会被生成; 不在表内的组合不是普通话合法音节 (如 bua/fe/gi/bou/zhiang)。
+const LEGAL = {
+  "":  "a o e ai ei ao ou an en ang eng",
+  zh:  "a e i u ai ao ou an en ang eng ong ua uo uai ui uan un uang",
+  ch:  "a e i u ai ao ou an en ang eng ong ua uo uai ui uan un uang",
+  sh:  "a e i u ai ao ou an en ang eng ua uo uai ui uan un uang",
+  b:   "a o i u ai ei ao an en ang eng ie iao ian in ing",
+  p:   "a o i u ai ei ao ou an en ang eng ie iao ian in ing",
+  m:   "a o e i u ai ei ao ou an en ang eng ie iao iu ian in ing",
+  f:   "a o u ei ou an en ang eng",
+  d:   "a e i u ai ao ou an en ang eng ong ia ie iao iu ian ing uo ui uan un",
+  t:   "a e i u ai ao ou an ang eng ong ie iao ian ing uo ui uan un",
+  n:   "a e i u ai ei ao ou an en ang eng ong ie iao iu ian in iang ing uo uan u: u:e",
+  l:   "a e i u ai ei ao ou an ang eng ong ia ie iao iu ian in iang ing uo uan un u: u:e",
+  g:   "a e u ai ei ao ou an en ang eng ong ua uo uai ui uan un uang",
+  k:   "a e u ai ei ao ou an en ang eng ong ua uo uai ui uan un uang",
+  h:   "a e u ai ei ao ou an en ang eng ong ua uo uai ui uan un uang",
+  j:   "i u ia ie iao iu ian in iang ing iong uan un",
+  q:   "i u ia ie iao iu ian in iang ing iong uan un",
+  x:   "i u ia ie iao iu ian in iang ing iong uan un",
+  r:   "e i u ao ou an en ang eng ong uo ui uan un",
+  z:   "a e i u ai ei ao ou an en ang eng ong uo ui uan un",
+  c:   "a e i u ai ao ou an en ang eng ong uo ui uan un",
+  s:   "a e i u ai ao ou an en ang eng ong uo ui uan un",
+};
+
 // 特例覆盖 (舌尖元音 / 零声母 / 拼写特例 / 唇音圆唇化 / 卷舌中央元音 / 罕见音节)
 const OVERRIDES = {
   zhi: "ジー", chi: "チー", shi: "シー", ri: "リー",
@@ -56,8 +84,10 @@ const OVERRIDES = {
 
 function buildP2K() {
   const t = {};
-  for (const init of Object.keys(INITIALS)) {
-    for (const [fin, [idx, suf]] of Object.entries(FINALS)) {
+  // 按合法音节结构生成 (声母 × 该声母允许的韵母), 不再取全交叉积
+  for (const [init, fins] of Object.entries(LEGAL)) {
+    for (const fin of fins.split(' ')) {
+      const [idx, suf] = FINALS[fin];
       t[init + fin] = INITIALS[init][idx] + suf;
     }
   }
@@ -81,6 +111,8 @@ export function chineseToKana(text) {
     if (/^[a-zü:v]+$/i.test(tok)) {
       const norm = tok.toLowerCase().replace(/v/g, "u:").replace(/ü/g, "u:");
       // 儿化音: 末尾 r 且原词不在表中 → 基音节 + ル
+      // 注: pinyin-pro 把「哪儿」切成 [na, er] 而非 [nar], 故此分支当前不可达,
+      //     儿化被读成一个完整音节 (哪兒→ナアル)。已知问题, 本次未处理。
       if (!P2K[norm] && norm.endsWith("r") && norm.length > 2) {
         const base = norm.slice(0, -1);
         if (P2K[base]) { out.push(P2K[base] + "ル"); continue; }
@@ -149,7 +181,11 @@ export function chineseToKanaAccent(text) {
     if (!before.endsWith("'")) {
       const kana = out[lastWordIdx];
       const at = lastMoraStart(kana);
-      out[lastWordIdx] = kana.slice(0, at) + "'" + kana.slice(at);
+      // ' 的语义是"其后的音高下降"; 若它落在输出开头就无对象可降 (例: 的 → 'デ),
+      // 这是无意义的记号, 故跳过。
+      if (!(lastWordIdx === 0 && at === 0)) {
+        out[lastWordIdx] = kana.slice(0, at) + "'" + kana.slice(at);
+      }
     }
   }
   return out.join("");
