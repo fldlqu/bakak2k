@@ -104,6 +104,43 @@ zip64 / data descriptor / 各种 flag 组合都能正确处理。
 | `-5` / `+5` | `マイナスゴ` / `プラスゴ` | 符号读 |
 | `10%` | `ジュウパーセント` | パーセント |
 
+### アクセント（音高）
+
+`src/kanji_accent.js` + `src/accent_junction.js` 处理音高记号 `'`（アクセント核），规则如下：
+
+- **连接コスト行列**：`aqdic.bin` 的 `0x9640`（`MTXD`/`MTX1`，1182×1182 的 int16）。
+  索引 = 记录的 `pos & 0x7fff`，index 0 = 文頭/文末；方向为 `cost(prev→next) = M[next][prev]`。
+  配合**状态为 `(文字位置, 直前品詞)` 的 Viterbi 分词**（连接コスト依赖前一词的品詞）。
+- **アクセント結合**：每条记录尾部的可变长「结合字节」（个数 `flag & 3`，位置见下方词典格式），
+  结合コードと核位置テーブルで核位置を決め、 `ン`/`ッ`/`ー` 的前移补正。
+- **句境界型**：アクセント句は語ごとの境界型で分割する。
+- **一句一下降**：各アクセント句の核 `'` は高々 1 つ。
+
+与官方 AqKanji2Koe 的一致率：**227/227 = 100%**（开发 140 句 + 保留 87 句），
+含 `'` 的假名序列逐字完全一致。
+
+```js
+import { createDict, convertJapanese } from 'bakak2k';
+const dict = createDict(aqdicBytes);
+convertJapanese(dict, '天気予報によると明日は雨らしいです').kana;
+// → テンキヨ'ホーニヨルトアシタ'ワア'メラシイデス
+```
+
+### 中文（拼音 → かな）
+
+`src/zh_kana.js` 把拼音转成假名（用 `pinyin-pro` 取拼音；音高模式下 4 声与句末降调用 `'` 表示）。
+`src/convert_text.js` 做混在文本的分段转换与标点归一化，`src/lang_tag.js` 提供闭合语言标签
+`[zh]…[/zh]` / `[ja]…[/ja]`。
+
+```js
+import { convertSegments } from 'bakak2k';
+const r = convertSegments(dict, '你好，世界');
+r.kana;                       // ニーハオ、シージエ
+r.parts.map(p => p.lang);     // ['zh', 'zh']  ← 逐段判定结果
+```
+
+自动判别：文本含假名 → 日语；否则「汉字未解析率 ≥ 0.3」→ 中文。
+
 ## 词典格式（解码备忘）
 
 词条正文 TOK1 记录布局：
@@ -112,8 +149,9 @@ zip64 / data descriptor / 各种 flag 组合都能正确处理。
 [pos2][cost2][flag][moraByte][accentByte][mora×(读音 kana 码)][flag&0x0f 字节附加]
 ```
 
-- `mora 数 = moraByte & 0x1f`
-- 附加字节数 = `flag & 0x0f`（`0x44/0x45` 时有特殊的 -1 规则）
+- `mora 数 = moraByte & 0x1f`（= `moraByte` 低 5 位）
+- `accentByte` 的核位置为 **低 5 位**（`& 0x1f`；高位不是 accent 的一部分）
+- 附加字节数 = `flag & 3`，起始偏移 = `rec + 7 + mora + ((flag & 4) ? 3 : 0)`
 - 尾部读 kana 码右对齐的 `e7 83` 前缀记录按右侧对齐规则读
 - kana 码表见 `src/kana.js`（来源：逆向 aqk2k_win_413/lib 相关常量）
 
@@ -139,6 +177,8 @@ const dict = createDictWithUser(aqdicBytes, aqUserBytes); // 用户词自动优�
 - **句尾逗号句号**：`。` 等仍原样透传，未输出 AQV 的句读代码。
 - **英语 g2p 兜底**对生僻词质量一般（常见词基本在词表内）。
 - **n/m 行掩码**：评估版把 マ行/ナ行 打成 `ヌ`，本实现按标准读音还原，付费版可最终对拍。
+- **纯假名输入**：纯假名文本的行为与汉字混排文本不同，本实现的アクセント対応以含汉字的句子为对象。
+- **词典外汉字连続**：词典里没有的汉字连続会按音读连接成一个节点，本实现未对应。
 
 ## 许可
 
